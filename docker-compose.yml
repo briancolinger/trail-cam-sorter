@@ -1,0 +1,25 @@
+version: '3'
+
+services:
+  app:
+    container_name: trail-cam-sorter
+    restart: 'no'
+    build:
+      context: .
+    volumes:
+      - .:/go/src/app
+      - /Volumes/trail-cams:/trail-cams
+    env_file:
+      - .env
+    command:
+      [
+        'go',
+        'run',
+        'main.go',
+        '--input=$INPUT_DIR',
+        '--output=$OUTPUT_DIR',
+        '--dry-run=$DRY_RUN',
+        '--limit=$LIMIT',
+        '--debug=$DEBUG',
+        '--workers=$WORKERS',
+      ]
