@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,13 @@ type ExtractedInfo struct {
 	Timestamp time.Time // the extracted timestamp
 	Date      time.Time // the extracted date
 	Camera    string    // the extracted camera name
+}
+
+// A struct that contains the extracted data from a Trail Cam image.
+type TrailCamData struct {
+	Timestamp   time.Time // The timestamp of the observation (including both time and date).
+	Temperature float64   // The temperature in degrees Celsius or Fahrenheit.
+	CameraName  string    // The name of the camera that captured the observation.
 }
 
 // Entry point of the TrailCamSorter program.
@@ -130,8 +138,6 @@ func (tcs *TrailCamSorter) processFiles() error {
 						"path":  path,
 						"error": err,
 					}).Error("Error processing file")
-				} else {
-					log.WithField("path", path).Info("File processed successfully")
 				}
 			}
 		}()
@@ -188,6 +194,11 @@ func (tcs *TrailCamSorter) processFiles() error {
 // based on this information, and moves the video file to the output path.
 // Returns an error if any of these steps fail.
 func (tcs *TrailCamSorter) processFile(inputFile string) error {
+	log.WithFields(log.Fields{
+		"event":      "processing_file",
+		"input_file": inputFile,
+	}).Info("Processing file")
+
 	// Read a frame from the video file.
 	frameBytes, err := tcs.readFrame(inputFile, tcs.Params.Timestamp)
 	if err != nil {
@@ -223,17 +234,44 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 		tcs.debugImages(inputFile, frameBytes, croppedImg)
 	}
 
-	// Extract the time, date, and camera name from the cropped image.
-	info, err := tcs.extractInfoFromImage(croppedImg)
+	// Convert the image to PNG format.
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, croppedImg); err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("Error encoding PNG")
+		return err
+	}
+	pngBytes := buf.Bytes()
+
+	// Perform optical character recognition (OCR) on the PNG data to extract the text.
+	rawText, err := tcs.performOCR(pngBytes)
 	if err != nil {
 		log.WithFields(log.Fields{
-			"input_file": inputFile,
-			"error":      err,
-		}).Error("Error extracting info from image")
+			"error": err,
+		}).Error("OCR: Error performing OCR")
+		return err
 	}
+	log.WithFields(log.Fields{
+		"event":    "performed_ocr",
+		"raw_text": rawText,
+	}).Info("OCR: Extracted raw text")
 
-	// Construct an output path for the video file based on the time, date, and camera name.
-	outputPath, err := tcs.constructOutputPath(*info)
+	// Parse data from the text.
+	data, err := tcs.parseTrailCamData(rawText)
+	if err != nil {
+		log.WithFields(log.Fields{
+			"error": err,
+		}).Error("OCR: Error extracting data from raw text")
+		return err
+	}
+	log.WithFields(log.Fields{
+		"event":          "extracted_data",
+		"trail_cam_data": fmt.Sprintf("%+v", data),
+	}).Info("OCR: Extracted data")
+
+	// Construct an output path for the file.
+	outputPath, err := tcs.constructOutputPath(data)
 	if err != nil {
 		log.WithFields(log.Fields{
 			"input_file": inputFile,
@@ -241,8 +279,8 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 		}).Error("Error constructing output path")
 	}
 
-	// Move the video file to the output path.
-	if err := tcs.moveFile(inputFile, outputPath); err != nil {
+	// Rename the file.
+	if err := tcs.renameFile(inputFile, outputPath); err != nil {
 		log.WithFields(log.Fields{
 			"input_file":  inputFile,
 			"output_path": outputPath,
@@ -250,10 +288,15 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 		}).Error("Error moving file")
 	}
 
+	log.WithFields(log.Fields{
+		"event":      "processed_file",
+		"input_file": inputFile,
+	}).Info("Done processing file")
+
 	return nil
 }
 
-// getImageDimensions reads the dimensions of an image file without loading the entire image into memory.
+// Reads the dimensions of an image file without loading the entire image into memory.
 func (tcs *TrailCamSorter) getImageDimensions(r io.Reader) (int, int, error) {
 	// Decode the image header to get the dimensions.
 	config, _, err := image.DecodeConfig(r)
@@ -288,12 +331,12 @@ func (tcs *TrailCamSorter) hasVideoFileExtension(path string) bool {
 // The output path has the format: OutputDir/CameraName/Date/CameraName-Date-Time.avi
 // If a file already exists at the output path, a suffix is added to the file name.
 // Returns the constructed output path and an error, if any.
-func (tcs *TrailCamSorter) constructOutputPath(info ExtractedInfo) (string, error) {
+func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) (string, error) {
 	// Define the format for the output path
-	outputPathFormat := filepath.Join(tcs.Params.OutputDir, info.Camera, info.Date.Format("2006-01-02"), "%s-%s-%s.avi")
+	outputPathFormat := filepath.Join(tcs.Params.OutputDir, data.CameraName, data.Timestamp.Format("2006-01-02"), "%s-%s-%s.avi")
 
 	// Construct the output path using the camera name, date, time
-	outputPath := fmt.Sprintf(outputPathFormat, info.Camera, info.Date.Format("2006-01-02"), info.Timestamp.Format("15-04-05PM"))
+	outputPath := fmt.Sprintf(outputPathFormat, data.CameraName, data.Timestamp.Format("2006-01-02"), data.Timestamp.Format("15-04-05PM"))
 
 	// Check if a file already exists at the output path
 	i := 1
@@ -304,7 +347,7 @@ func (tcs *TrailCamSorter) constructOutputPath(info ExtractedInfo) (string, erro
 		}
 
 		// If a file already exists, add a suffix and try again
-		outputPath = fmt.Sprintf(outputPathFormat, info.Camera, info.Date.Format("2006-01-02"), info.Timestamp.Format("15-04-05PM")+fmt.Sprintf("-%d", i))
+		outputPath = fmt.Sprintf(outputPathFormat, data.CameraName, data.Timestamp.Format("2006-01-02"), data.Timestamp.Format("15-04-05PM")+fmt.Sprintf("-%d", i))
 		i++
 	}
 
@@ -312,7 +355,7 @@ func (tcs *TrailCamSorter) constructOutputPath(info ExtractedInfo) (string, erro
 	return outputPath, nil
 }
 
-func (tcs *TrailCamSorter) moveFile(src string, dest string) error {
+func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 	// Return early if DryRun is true
 	if tcs.Params.DryRun {
 		log.WithFields(log.Fields{
@@ -335,7 +378,7 @@ func (tcs *TrailCamSorter) moveFile(src string, dest string) error {
 		"dest": dest,
 	}).Info("Renaming file")
 
-	// Move the file
+	// Rename the file
 	err = os.Rename(src, dest)
 	if err != nil {
 		return err
@@ -364,68 +407,6 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, timestamp string) ([]byte
 	return buf.Bytes(), nil
 }
 
-// Takes an image and extracts the timestamp, date, and camera name from it.
-func (tcs *TrailCamSorter) extractInfoFromImage(img image.Image) (*ExtractedInfo, error) {
-	// Convert the image to PNG format
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, err
-	}
-
-	pngBytes := buf.Bytes()
-
-	// Perform optical character recognition (OCR) on the PNG data to extract the text
-	text, err := tcs.performOCR(pngBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	log.WithFields(log.Fields{
-		"event": "ocr_raw",
-		"text":  text,
-	}).Info("OCR: raw text")
-
-	// Clean up the text
-	text = tcs.cleanupOCRText(text)
-
-	log.WithFields(log.Fields{
-		"event": "ocr_cleaned",
-		"text":  text,
-	}).Info("OCR: cleaned text")
-
-	// Extract the time
-	t, err := tcs.extractTime(text)
-	if err != nil {
-		return nil, err
-	}
-	log.WithFields(log.Fields{
-		"event": "ocr_extract_time",
-		"time":  t.Format("15:04:05"),
-	}).Info("OCR: extracted time")
-
-	// Extract the date
-	date, err := tcs.extractDate(text)
-	if err != nil {
-		return nil, err
-	}
-	log.WithFields(log.Fields{
-		"event": "ocr_extract_date",
-		"date":  date.Format("2006-01-02"),
-	}).Info("OCR: extracted date")
-
-	// Extract the camera name
-	camera, err := tcs.extractCameraName(text)
-	if err != nil {
-		return nil, err
-	}
-	log.WithFields(log.Fields{
-		"event":  "ocr_extract_camera_name",
-		"camera": camera,
-	}).Info("OCR: extracted camera name")
-
-	return &ExtractedInfo{Timestamp: t, Date: date, Camera: camera}, nil
-}
-
 // Takes an image in PNG format, along with the bottom and right arguments, and returns a new image that has been cropped to the specified dimensions.
 func (tcs *TrailCamSorter) cropImage(pngBytes []byte, bottom int, right int) (image.Image, error) {
 	// Decode the PNG data into an image
@@ -446,7 +427,6 @@ func (tcs *TrailCamSorter) cropImage(pngBytes []byte, bottom int, right int) (im
 	}).SubImage(box), nil
 }
 
-// Takes an array of bytes representing a PNG image, performs OCR on the image using Tesseract, and returns the resulting text.
 func (tcs *TrailCamSorter) performOCR(pngBytes []byte) (string, error) {
 	// Create a new Tesseract client and set the image from the provided bytes
 	client := gosseract.NewClient()
@@ -464,68 +444,62 @@ func (tcs *TrailCamSorter) performOCR(pngBytes []byte) (string, error) {
 	}
 
 	// Perform OCR on the image and return the resulting text
-	return client.Text()
-}
-
-// Takes a string and removes all non-alphanumeric characters, replacing them with spaces.
-func (tcs *TrailCamSorter) cleanupOCRText(text string) string {
-	// Remove non-alphanumeric characters from the text, keep : and /
-	re := regexp.MustCompile("[^a-zA-Z0-9/:]+")
-	return re.ReplaceAllString(text, " ")
-}
-
-// Extracts the time and date from a text string using regex.
-// It returns the parsed time.Time value for the time.
-// An error is returned if the input text is not in the expected format or if parsing fails.
-func (tcs *TrailCamSorter) extractTime(text string) (time.Time, error) {
-	timeRegex := regexp.MustCompile(`(\d{2}):(\d{2})(AM|PM)`)
-	timeMatch := timeRegex.FindStringSubmatch(text)
-	if len(timeMatch) != 4 {
-		return time.Time{}, fmt.Errorf("unexpected time string format: %s", timeMatch)
-	}
-
-	// Parse the time
-	t, err := time.Parse("03:04PM", fmt.Sprintf("%s:%s%s", timeMatch[1], timeMatch[2], timeMatch[3]))
+	text, err := client.Text()
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to parse time: %v", err)
+		return "", err
 	}
-	return t, nil
+	if len(text) == 0 {
+		return "", fmt.Errorf("OCR failed: no text returned")
+	}
+
+	return text, nil
 }
 
-// Extracts the time and date from a text string using regex.
-// It returns the parsed time.Time value for the date.
-// An error is returned if the input text is not in the expected format or if parsing fails.
-func (tcs *TrailCamSorter) extractDate(text string) (time.Time, error) {
-	dateRegex := regexp.MustCompile(`(\d{2})/(\d{2})/(\d{4})`)
-	dateMatch := dateRegex.FindStringSubmatch(text)
-	if len(dateMatch) != 4 {
-		return time.Time{}, fmt.Errorf("unexpected date string format: %s", dateMatch)
+// Parses the input text and extracts relevant data into a TrailCamData struct.
+// Returns the TrailCamData struct and an error, if any.
+func (tcs *TrailCamSorter) parseTrailCamData(text string) (TrailCamData, error) {
+	// Compile the regular expression to match the required patterns
+	pattern := `(?P<timestamp>\d{2}:\d{2}[AP]M\s+\d{1,2}/\d{1,2}/\d{4})\s+(?P<temp>\d+)\s*(?P<temp_unit>°[CF])\s*[^\w\r\n]*(?P<camera_name>\w+(?:\s+\w+)*)$`
+	regex := regexp.MustCompile(pattern)
+
+	// Extract the named capture groups from the input text
+	match := regex.FindStringSubmatch(text)
+	if match == nil {
+		return TrailCamData{}, fmt.Errorf("failed to extract data from text: %s", text)
+	}
+	groups := make(map[string]string)
+	for i, name := range regex.SubexpNames() {
+		if i != 0 && name != "" {
+			groups[name] = match[i]
+		}
 	}
 
-	// Parse the date
-	date, err := time.Parse("2006-01-02", fmt.Sprintf("%s-%s-%s", dateMatch[3], dateMatch[1], dateMatch[2]))
+	// Parse the timestamp and temperature
+	ts, err := time.Parse("03:04PM 01/02/2006", groups["timestamp"])
 	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to parse date: %v", err)
-	}
-	return date, nil
-}
-
-// Extracts the camera name from a text string using regex.
-// It returns the camera name in lowercase with spaces replaced by hyphens.
-// An error is returned if the input text does not contain the camera name.
-func (tcs *TrailCamSorter) extractCameraName(text string) (string, error) {
-	cameraRegex := regexp.MustCompile(`\bRIDGE\s?LINE(?:\s+\d+)?\b`)
-	cameraMatch := cameraRegex.FindStringSubmatch(text)
-	if cameraMatch == nil {
-		return "", fmt.Errorf("could not find camera name")
+		return TrailCamData{}, fmt.Errorf("failed to parse timestamp: %v", err)
 	}
 
-	// Clean up the camera name
-	camera := strings.TrimSpace(cameraMatch[0])
-	camera = strings.ReplaceAll(camera, " ", "-")
-	camera = strings.ToLower(camera)
+	temp, err := strconv.ParseFloat(groups["temp"], 64)
+	if err != nil {
+		return TrailCamData{}, fmt.Errorf("failed to parse temperature: %v", err)
+	}
+	if groups["temp_unit"] == "°C" {
+		temp = (temp * 9 / 5) + 32 // Convert Celsius to Fahrenheit
+	}
 
-	return camera, nil
+	// Extract the camera name
+	cn := strings.TrimSpace(groups["camera_name"])
+	cn = strings.ReplaceAll(cn, " ", "-")
+	cn = strings.ToLower(cn)
+
+	// Create a new TrailCamData struct and return it
+	data := TrailCamData{
+		Timestamp:   ts,
+		Temperature: temp,
+		CameraName:  cn,
+	}
+	return data, nil
 }
 
 // Removes all empty directories that are subdirectories of the input directory.
