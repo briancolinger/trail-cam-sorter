@@ -37,13 +37,6 @@ type SorterParams struct {
 	Workers   int    // the number of workers used to process files
 }
 
-// A struct that contains the extracted timestamp, date, and camera name from an image.
-type ExtractedInfo struct {
-	Timestamp time.Time // the extracted timestamp
-	Date      time.Time // the extracted date
-	Camera    string    // the extracted camera name
-}
-
 // A struct that contains the extracted data from a Trail Cam image.
 type TrailCamData struct {
 	Timestamp   time.Time // The timestamp of the observation (including both time and date).
