@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"image"
@@ -31,7 +32,6 @@ type SorterParams struct {
 	InputDir  string // the input directory containing video files
 	OutputDir string // the output directory for sorted video files
 	DryRun    bool   // if true, the files will not be moved
-	Timestamp string // the timestamp used to extract video frames
 	Debug     bool   // enables debug mode
 	Limit     int    // limits the number of files processed
 	Workers   int    // the number of workers used to process files
@@ -43,6 +43,21 @@ type TrailCamData struct {
 	Temperature float64   // The temperature in degrees Celsius or Fahrenheit.
 	CameraName  string    // The name of the camera that captured the observation.
 }
+
+// Declare constants for the frame dimensions and crop margins.
+const (
+	FrameWidth1920  = 1920 // Width of frame in pixels for 1920x1080 video.
+	FrameHeight1080 = 1080 // Height of frame in pixels for 1920x1080 video.
+	FrameWidth1280  = 1280 // Width of frame in pixels for 1280x720 video.
+	FrameHeight720  = 720  // Height of frame in pixels for 1280x720 video.
+	CropMargin60    = 60   // Number of pixels to crop from top and bottom for 1920x1080 video.
+	CropMargin1200  = 1200 // Number of pixels to crop from left and right for 1920x1080 video.
+	CropMargin40    = 40   // Number of pixels to crop from top and bottom for 1280x720 video.
+	CropMargin800   = 800  // Number of pixels to crop from left and right for 1280x720 video.
+)
+
+// ErrUnsupportedImageDimensions is an error that is returned when the image dimensions are unsupported.
+var ErrUnsupportedImageDimensions = errors.New("unsupported image dimensions")
 
 // Entry point of the TrailCamSorter program.
 // Creates a new instance.
@@ -95,7 +110,6 @@ func (tcs *TrailCamSorter) parseFlags() error {
 	flag.StringVar(&tcs.Params.InputDir, "input", "", "the input directory containing video files")
 	flag.StringVar(&tcs.Params.OutputDir, "output", "", "the output directory for sorted video files")
 	flag.BoolVar(&tcs.Params.DryRun, "dry-run", true, "if true, the files will not be moved")
-	flag.StringVar(&tcs.Params.Timestamp, "timestamp", "00:00:00", "the timestamp used to extract video frames")
 	flag.BoolVar(&tcs.Params.Debug, "debug", false, "if true, enables debug mode")
 	flag.IntVar(&tcs.Params.Limit, "limit", math.MaxInt32, "limits the number of files processed")
 	flag.IntVar(&tcs.Params.Workers, "workers", 0, "the number of workers used to process files")
@@ -187,75 +201,85 @@ func (tcs *TrailCamSorter) processFiles() error {
 // based on this information, and moves the video file to the output path.
 // Returns an error if any of these steps fail.
 func (tcs *TrailCamSorter) processFile(inputFile string) error {
-	log.WithFields(log.Fields{
-		"event":      "processing_file",
-		"input_file": inputFile,
-	}).Info("Processing file")
+	var err error
 
-	// Read a frame from the video file.
-	frameBytes, err := tcs.readFrame(inputFile, tcs.Params.Timestamp)
-	if err != nil {
+	defer func() {
+		if err != nil {
+			log.WithFields(log.Fields{
+				"input_file": inputFile,
+				"error":      err,
+			}).Error("Error processing file")
+		} else {
+			log.WithFields(log.Fields{
+				"event":      "processed_file",
+				"input_file": inputFile,
+			}).Info("Done processing file")
+		}
+	}()
+
+	var rawText string
+	for numTries := 0; numTries <= 5; numTries++ {
 		log.WithFields(log.Fields{
+			"event":      "processing_file",
 			"input_file": inputFile,
-			"error":      err,
-		}).Error("Error reading frame")
-	}
+			"num_tries":  numTries,
+		}).Info("Processing file")
 
-	// Crop the image based on its dimensions.
-	var croppedImg image.Image
-	width, height, err := tcs.getImageDimensions(bytes.NewReader(frameBytes))
-	if err != nil {
+		// Read a frame from the video file.
+		frameBytes, err := tcs.readFrame(inputFile, numTries)
+		if err != nil {
+			continue
+		}
+
+		// Crop the image based on its dimensions.
+		var croppedImg image.Image
+		width, height, err := tcs.getImageDimensions(bytes.NewReader(frameBytes))
+		if err != nil {
+			continue
+		}
+
+		switch {
+		case width == FrameWidth1920 && height == FrameHeight1080:
+			croppedImg, err = tcs.cropImage(frameBytes, CropMargin60, CropMargin1200)
+		case width == FrameWidth1280 && height == FrameHeight720:
+			croppedImg, err = tcs.cropImage(frameBytes, CropMargin40, CropMargin800)
+		default:
+			err = ErrUnsupportedImageDimensions
+		}
+		if err != nil {
+			return err
+		}
+
+		if tcs.Params.Debug {
+			tcs.debugImages(inputFile, frameBytes, croppedImg, numTries)
+		}
+
+		// Convert the image to PNG format.
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, croppedImg); err != nil {
+			return err
+		}
+		pngBytes := buf.Bytes()
+
+		// Perform optical character recognition (OCR) on the PNG data to extract the text.
+		rawText, err = tcs.performOCR(pngBytes)
+		if err != nil {
+			log.WithField("error", err).Error("Error performing OCR")
+			continue
+		}
+
 		log.WithFields(log.Fields{
-			"input_file": inputFile,
-			"error":      err,
-		}).Error("Error getting image dimensions")
-	}
+			"event":    "performed_ocr",
+			"raw_text": rawText,
+		}).Info("OCR: Extracted raw text")
 
-	if width == 1920 && height == 1080 {
-		croppedImg, err = tcs.cropImage(frameBytes, 60, 1200)
-	} else if width == 1280 && height == 720 {
-		croppedImg, err = tcs.cropImage(frameBytes, 40, 800)
-	} else {
-		// Return an error if the image dimensions are unsupported.
-		log.WithField("error", "Unsupported image dimensions").Error()
+		// If OCR succeeds, break out of the retry loop.
+		break
 	}
-	if err != nil {
-		return err
-	}
-
-	if tcs.Params.Debug {
-		tcs.debugImages(inputFile, frameBytes, croppedImg)
-	}
-
-	// Convert the image to PNG format.
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, croppedImg); err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Error("Error encoding PNG")
-		return err
-	}
-	pngBytes := buf.Bytes()
-
-	// Perform optical character recognition (OCR) on the PNG data to extract the text.
-	rawText, err := tcs.performOCR(pngBytes)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Error("OCR: Error performing OCR")
-		return err
-	}
-	log.WithFields(log.Fields{
-		"event":    "performed_ocr",
-		"raw_text": rawText,
-	}).Info("OCR: Extracted raw text")
 
 	// Parse data from the text.
 	data, err := tcs.parseTrailCamData(rawText)
 	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Error("OCR: Error extracting data from raw text")
 		return err
 	}
 	log.WithFields(log.Fields{
@@ -266,25 +290,13 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 	// Construct an output path for the file.
 	outputPath, err := tcs.constructOutputPath(data)
 	if err != nil {
-		log.WithFields(log.Fields{
-			"input_file": inputFile,
-			"error":      err,
-		}).Error("Error constructing output path")
+		return err
 	}
 
 	// Rename the file.
 	if err := tcs.renameFile(inputFile, outputPath); err != nil {
-		log.WithFields(log.Fields{
-			"input_file":  inputFile,
-			"output_path": outputPath,
-			"error":       err,
-		}).Error("Error moving file")
+		return err
 	}
-
-	log.WithFields(log.Fields{
-		"event":      "processed_file",
-		"input_file": inputFile,
-	}).Info("Done processing file")
 
 	return nil
 }
@@ -380,23 +392,26 @@ func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 	return nil
 }
 
-// Reads a frame from a video file at the specified timestamp.
-func (tcs *TrailCamSorter) readFrame(inputFile string, timestamp string) ([]byte, error) {
-	// Build the FFmpeg command to extract the frame at the specified timestamp as a grayscale PNG image and write it to a pipe
+// Reads a frame from a video file at the specified time offset and returns the frame data as a PNG image.
+func (tcs *TrailCamSorter) readFrame(inputFile string, retry int) ([]byte, error) {
+	// Calculate the timestamp as a string in the format "00:00:00.000" based on the retry counter.
+	timestamp := fmt.Sprintf("%02d:%02d:%02d.000", retry/3600, (retry/60)%60, retry%60)
+
+	// Build the FFmpeg command to extract the frame at the specified timestamp as a grayscale PNG image and write it to a pipe.
 	cmd := exec.Command("ffmpeg", "-loglevel", "error", "-ss", timestamp, "-i", inputFile, "-vframes", "1", "-f", "image2pipe", "-pix_fmt", "gray", "-c:v", "png", "-")
 
-	// Create a buffer to hold the output from the command
+	// Create a buffer to hold the output from the command.
 	var buf bytes.Buffer
 
-	// Set the command's output to the buffer
+	// Set the command's output to the buffer.
 	cmd.Stdout = &buf
 
-	// Run the FFmpeg command
+	// Run the FFmpeg command.
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 
-	// Return the PNG data as a byte slice
+	// Return the PNG data as a byte slice.
 	return buf.Bytes(), nil
 }
 
@@ -545,7 +560,7 @@ func (tcs *TrailCamSorter) removeEmptyDirs() error {
 }
 
 // Write images to file for debugging purposes.
-func (tcs *TrailCamSorter) debugImages(inputFile string, frame []byte, croppedImg image.Image) {
+func (tcs *TrailCamSorter) debugImages(inputFile string, frame []byte, croppedImg image.Image, numTries int) {
 	// Create the debug directory
 	debugDir := filepath.Join(tcs.Params.InputDir, "debug")
 	err := os.MkdirAll(debugDir, os.ModePerm)
@@ -569,7 +584,7 @@ func (tcs *TrailCamSorter) debugImages(inputFile string, frame []byte, croppedIm
 	}
 
 	// Create the frame file
-	frameFilePath := filepath.Join(debugDir, inputFileName+"-frame.png")
+	frameFilePath := filepath.Join(debugDir, fmt.Sprintf("%s-frame-%d.png", inputFileName, numTries))
 	frameFile, err := os.Create(frameFilePath)
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -587,7 +602,7 @@ func (tcs *TrailCamSorter) debugImages(inputFile string, frame []byte, croppedIm
 	}
 
 	// Create the cropped image file
-	croppedFilePath := filepath.Join(debugDir, inputFileName+"-cropped.png")
+	croppedFilePath := filepath.Join(debugDir, fmt.Sprintf("%s-cropped-%d.png", inputFileName, numTries))
 	croppedFile, err := os.Create(croppedFilePath)
 	if err != nil {
 		log.WithFields(log.Fields{
