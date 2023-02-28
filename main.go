@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/otiai10/gosseract"
 	log "github.com/sirupsen/logrus"
@@ -39,9 +40,10 @@ type SorterParams struct {
 
 // A struct that contains the extracted data from a Trail Cam image.
 type TrailCamData struct {
-	Timestamp   time.Time // The timestamp of the observation (including both time and date).
-	Temperature float64   // The temperature in degrees Celsius or Fahrenheit.
-	CameraName  string    // The name of the camera that captured the observation.
+	Timestamp       time.Time // The timestamp of the observation (including both time and date).
+	Temperature     int       // The temperature in degrees Celsius or Fahrenheit.
+	TemperatureUnit string    // The temperature unit (either "C" or "F").
+	CameraName      string    // The name of the camera that captured the observation.
 }
 
 // Declare constants for the frame dimensions and crop margins.
@@ -282,6 +284,7 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 	if err != nil {
 		return err
 	}
+
 	log.WithFields(log.Fields{
 		"event":          "extracted_data",
 		"trail_cam_data": fmt.Sprintf("%+v", data),
@@ -466,11 +469,11 @@ func (tcs *TrailCamSorter) performOCR(pngBytes []byte) (string, error) {
 // Parses the input text and extracts relevant data into a TrailCamData struct.
 // Returns the TrailCamData struct and an error, if any.
 func (tcs *TrailCamSorter) parseTrailCamData(text string) (TrailCamData, error) {
-	// Compile the regular expression to match the required patterns
-	pattern := `(?P<timestamp>\d{2}:\d{2}[AP]M\s+\d{1,2}/\d{1,2}/\d{4})\s+(?P<temp>\d+)\s*(?P<temp_unit>°[CF])\s*[^\w\r\n]*(?P<camera_name>\w+(?:\s+\w+)*)$`
+	// Compile the regular expression to match the required patterns.
+	pattern := `(?P<timestamp>\d{2}:\d{2}[AP]M\s+\d{1,2}/\d{1,2}/\d{4})\s+(?P<temp>(?:-)?(?:[A-Za-z]\d+|\d+))\s*(?P<temp_unit>°[CF])\s*[^\w\r\n]*(?P<camera_name>\w+(?:\s+\w+)*)$`
 	regex := regexp.MustCompile(pattern)
 
-	// Extract the named capture groups from the input text
+	// Extract the named capture groups from the input text.
 	match := regex.FindStringSubmatch(text)
 	if match == nil {
 		return TrailCamData{}, fmt.Errorf("failed to extract data from text: %s", text)
@@ -488,24 +491,47 @@ func (tcs *TrailCamSorter) parseTrailCamData(text string) (TrailCamData, error) 
 		return TrailCamData{}, fmt.Errorf("failed to parse timestamp: %v", err)
 	}
 
-	temp, err := strconv.ParseFloat(groups["temp"], 64)
-	if err != nil {
-		return TrailCamData{}, fmt.Errorf("failed to parse temperature: %v", err)
+	var temp int = 0
+	tempString := groups["temp"]
+	if tempString != "" {
+		val, err := strconv.Atoi(tempString)
+		if err != nil {
+			// Set temp to 0 if temperature value is not valid.
+			temp = 0
+		} else {
+			temp = val
+		}
 	}
-	if groups["temp_unit"] == "°C" {
-		temp = (temp * 9 / 5) + 32 // Convert Celsius to Fahrenheit
+
+	var unit string
+	unitString := groups["temp_unit"]
+	if unitString != "" {
+		// Remove the degree symbol from the temperature unit.
+		unitString = strings.TrimPrefix(unitString, "°")
+		unit = unitString
+	} else {
+		// Set the temperature unit to "F" by default.
+		unit = "F"
 	}
 
 	// Extract the camera name
 	cn := strings.TrimSpace(groups["camera_name"])
+	// Sometimes the parsed camera name is prefixed with a single letter and a space.
+	// This happens because the OCR is seeing a symbol that represents the moon phase.
+	// Sometimes the moon phase symbol looks like a capital O.
+	// This is kinda hacky, but just trim off a single letter and a space.
+	if len(cn) > 1 && unicode.IsLetter(rune(cn[0])) && cn[1] == ' ' {
+		cn = cn[2:]
+	}
 	cn = strings.ReplaceAll(cn, " ", "-")
 	cn = strings.ToLower(cn)
 
-	// Create a new TrailCamData struct and return it
+	// Create a new TrailCamData struct and return it.
 	data := TrailCamData{
-		Timestamp:   ts,
-		Temperature: temp,
-		CameraName:  cn,
+		Timestamp:       ts,
+		Temperature:     temp,
+		TemperatureUnit: unit,
+		CameraName:      cn,
 	}
 	return data, nil
 }
