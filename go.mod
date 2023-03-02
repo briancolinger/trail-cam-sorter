@@ -5,6 +5,7 @@ go 1.19
 require (
 	github.com/otiai10/gosseract v2.2.1+incompatible
 	github.com/sirupsen/logrus v1.9.0
+	gocv.io/x/gocv v0.32.1
 )
 
 require (
