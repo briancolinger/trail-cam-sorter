@@ -10,7 +10,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -21,6 +20,7 @@ import (
 
 	"github.com/otiai10/gosseract"
 	log "github.com/sirupsen/logrus"
+	"gocv.io/x/gocv"
 )
 
 // TrailCamSorter is a struct that represents a trail camera video file sorter.
@@ -438,27 +438,32 @@ func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 	return nil
 }
 
-// Reads a frame from a video file at the specified time offset and returns the frame data as a PNG image.
-func (tcs *TrailCamSorter) readFrame(inputFile string, retry int) ([]byte, error) {
-	// Calculate the timestamp as a string in the format "00:00:00.000" based on the retry counter.
-	timestamp := fmt.Sprintf("%02d:%02d:%02d.000", retry/3600, (retry/60)%60, retry%60)
+// Reads a frame from a video file at the specified frame number and returns the frame data as a PNG image.
+func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) ([]byte, error) {
+	// Open the video file
+	cap, err := gocv.VideoCaptureFile(inputFile)
+	if err != nil {
+		return nil, err
+	}
+	defer cap.Close()
 
-	// Build the FFmpeg command to extract the frame at the specified timestamp as a grayscale PNG image and write it to a pipe.
-	cmd := exec.Command("ffmpeg", "-loglevel", "error", "-ss", timestamp, "-i", inputFile, "-vframes", "1", "-f", "image2pipe", "-pix_fmt", "gray", "-c:v", "png", "-")
+	// Move the video to the desired frame number
+	cap.Set(gocv.VideoCapturePosFrames, float64(frameNumber))
 
-	// Create a buffer to hold the output from the command.
-	var buf bytes.Buffer
+	// Read the frame from the video
+	frame := gocv.NewMat()
+	defer frame.Close()
+	if ok := cap.Read(&frame); !ok {
+		return nil, fmt.Errorf("failed to read frame from video")
+	}
 
-	// Set the command's output to the buffer.
-	cmd.Stdout = &buf
-
-	// Run the FFmpeg command.
-	if err := cmd.Run(); err != nil {
+	// Convert the frame to a PNG image
+	buf, err := gocv.IMEncode(".png", frame)
+	if err != nil {
 		return nil, err
 	}
 
-	// Return the PNG data as a byte slice.
-	return buf.Bytes(), nil
+	return buf.GetBytes(), nil
 }
 
 // Takes an image in PNG format, along with the bottom and right arguments, and returns a new image that has been cropped to the specified dimensions.
