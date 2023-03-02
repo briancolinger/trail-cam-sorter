@@ -152,19 +152,56 @@ func (tcs *TrailCamSorter) processFiles() error {
 		}()
 	}
 
+	// List of directory and file names to ignore.
+	ignoreNames := []string{"$RECYCLE.BIN", ".Spotlight-V100", "System Volume Information", ".fseventsd", ".Trashes", ".DS_Store"}
+	// Convert the list of ignore names to a map for efficient lookup.
+	ignoreMap := make(map[string]bool)
+	for _, name := range ignoreNames {
+		ignoreMap[name] = true
+	}
+
 	// Walk through the input directory and send each file path to the channel
 	var count int
 	err := filepath.Walk(tcs.Params.InputDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.WithFields(log.Fields{
-				"path":  path,
-				"error": err,
-			}).Error("Error accessing path")
-			return nil
+			// Check if the error is due to a permission issue and skip the directory.
+			if os.IsPermission(err) {
+				log.WithFields(log.Fields{
+					"path":  path,
+					"error": err,
+				}).Warn("Skipping directory due to permission issue")
+				return filepath.SkipDir
+			} else {
+				// Handle other errors.
+				log.WithFields(log.Fields{
+					"path":  path,
+					"error": err,
+				}).Error("Error accessing path")
+				return nil
+			}
 		}
 
 		if info.IsDir() {
+			// Check if the directory should be ignored.
+			dir := filepath.Base(path)
+			if ignoreMap[dir] {
+				log.WithFields(log.Fields{
+					"type": "directory",
+					"path": path,
+				}).Warn("Skipping ignored directory")
+				return filepath.SkipDir // Skip the directory
+			}
 			return nil
+		}
+
+		// Check if the file should be ignored.
+		filename := filepath.Base(path)
+		if ignoreMap[filename] {
+			log.WithFields(log.Fields{
+				"type": "file",
+				"path": path,
+			}).Warn("Skipping ignored file")
+			return nil // Skip the file
 		}
 
 		if !tcs.hasVideoFileExtension(path) {
@@ -319,6 +356,12 @@ func (tcs *TrailCamSorter) getImageDimensions(r io.Reader) (int, int, error) {
 // path is the file path to be checked.
 // returns true if the file has a supported video file extension, false otherwise.
 func (tcs *TrailCamSorter) hasVideoFileExtension(path string) bool {
+	// Ignored filenames like: ._01.avi
+	matchedInvalidAvi := regexp.MustCompile(`^\._.+\.avi$`).MatchString(filepath.Base(path))
+	if matchedInvalidAvi {
+		return false
+	}
+
 	// Define the list of supported video file extensions
 	supportedExtensions := []string{".avi", ".mp4", ".mov", ".wmv", ".mkv", ".flv", ".webm", ".m4v", ".mpeg", ".mpg", ".m2v", ".ts", ".mts", ".m2ts", ".vob", ".3gp"}
 
