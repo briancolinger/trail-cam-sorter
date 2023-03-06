@@ -1,22 +1,17 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"image"
-	"image/png"
-	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/otiai10/gosseract"
 	log "github.com/sirupsen/logrus"
@@ -40,23 +35,15 @@ type SorterParams struct {
 
 // A struct that contains the extracted data from a Trail Cam image.
 type TrailCamData struct {
-	Timestamp       time.Time // The timestamp of the observation (including both time and date).
-	Temperature     int       // The temperature in degrees Celsius or Fahrenheit.
-	TemperatureUnit string    // The temperature unit (either "C" or "F").
-	CameraName      string    // The name of the camera that captured the observation.
+	Timestamp  time.Time // The timestamp of the observation (including both time and date).
+	CameraName string    // The name of the camera that captured the observation.
 }
 
-// Declare constants for the frame dimensions and crop margins.
-const (
-	FrameWidth1920  = 1920 // Width of frame in pixels for 1920x1080 video.
-	FrameHeight1080 = 1080 // Height of frame in pixels for 1920x1080 video.
-	FrameWidth1280  = 1280 // Width of frame in pixels for 1280x720 video.
-	FrameHeight720  = 720  // Height of frame in pixels for 1280x720 video.
-	CropMargin60    = 60   // Number of pixels to crop from top and bottom for 1920x1080 video.
-	CropMargin1200  = 1200 // Number of pixels to crop from left and right for 1920x1080 video.
-	CropMargin40    = 40   // Number of pixels to crop from top and bottom for 1280x720 video.
-	CropMargin800   = 800  // Number of pixels to crop from left and right for 1280x720 video.
-)
+// Represents a rectangular region in an image, identified by a label string and a corresponding image.Rectangle.
+type BoundingBox struct {
+	Label string          // Label associated with this bounding box.
+	Rect  image.Rectangle // Rectangle specifying the region in the image.
+}
 
 // ErrUnsupportedImageDimensions is an error that is returned when the image dimensions are unsupported.
 var ErrUnsupportedImageDimensions = errors.New("unsupported image dimensions")
@@ -72,7 +59,7 @@ func main() {
 	start := time.Now()
 
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.InfoLevel)
 
 	// Create a new TrailCamSorter instance
 	tcs := &TrailCamSorter{}
@@ -83,6 +70,11 @@ func main() {
 		log.WithFields(log.Fields{
 			"error": err,
 		}).Fatal("Error parsing flags")
+	}
+
+	// Change logging level if debugging.
+	if tcs.Params.Debug {
+		log.SetLevel(log.DebugLevel)
 	}
 
 	// Process the files
@@ -241,91 +233,81 @@ func (tcs *TrailCamSorter) processFiles() error {
 // Returns an error if any of these steps fail.
 func (tcs *TrailCamSorter) processFile(inputFile string) error {
 	var err error
+	var data TrailCamData
 
-	defer func() {
-		if err != nil {
-			log.WithFields(log.Fields{
-				"input_file": inputFile,
-				"error":      err,
-			}).Error("Error processing file")
-		} else {
-			log.WithFields(log.Fields{
-				"event":      "processed_file",
-				"input_file": inputFile,
-			}).Info("Done processing file")
-		}
-	}()
-
-	var rawText string
-	for numTries := 0; numTries <= 5; numTries++ {
-		log.WithFields(log.Fields{
-			"event":      "processing_file",
-			"input_file": inputFile,
-			"num_tries":  numTries,
-		}).Info("Processing file")
-
+	// Attempt to read the frame.
+	frameNumber := 1
+	for frameNumber <= 5 {
 		// Read a frame from the video file.
-		frameBytes, err := tcs.readFrame(inputFile, numTries)
-		if err != nil {
+		frame, err := tcs.readFrame(inputFile, frameNumber)
+		if frame == nil {
+			log.WithFields(log.Fields{
+				"error":     err,
+				"num_tries": frameNumber,
+			}).Error("Error frame is nil")
+			frameNumber++
 			continue
 		}
 
-		// Crop the image based on its dimensions.
-		var croppedImg image.Image
-		width, height, err := tcs.getImageDimensions(bytes.NewReader(frameBytes))
+		// Write frame to file for debugging.
+		tcs.debugImages(frame, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame")))
+
 		if err != nil {
+			log.WithFields(log.Fields{
+				"error":     err,
+				"num_tries": frameNumber,
+			}).Error("Error reading frame")
+			frameNumber++
 			continue
 		}
+		defer frame.Close()
 
-		switch {
-		case width == FrameWidth1920 && height == FrameHeight1080:
-			croppedImg, err = tcs.cropImage(frameBytes, CropMargin60, CropMargin1200)
-		case width == FrameWidth1280 && height == FrameHeight720:
-			croppedImg, err = tcs.cropImage(frameBytes, CropMargin40, CropMargin800)
-		default:
-			err = ErrUnsupportedImageDimensions
+		// Create bounding boxes scaled to the width and height of the frame.
+		boundingBoxes := tcs.processFrame(frame)
+
+		// Get data from the bounding boxes.
+		for _, box := range boundingBoxes {
+			cropped := frame.Region(box.Rect)
+			defer cropped.Close()
+
+			// Write cropped image to file for debugging.
+			tcs.debugImages(&cropped, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label)))
+
+			text, err := tcs.performOCR(&cropped)
+			if err != nil {
+				log.WithFields(log.Fields{
+					"error":    err,
+					"ocr_text": text,
+				}).Error(fmt.Sprintf("Error performing OCR for %s", box.Label))
+				continue
+			}
+			log.WithFields(log.Fields{
+				"ocr_text": text,
+			}).Debug(fmt.Sprintf("OCR: %s", box.Label))
+
+			data = tcs.updateTrailCamData(data, box.Label, text)
 		}
+
+		// Validate the TrailCamData.
+		err = tcs.validateTrailCamData(data)
 		if err != nil {
-			return err
-		}
+			log.WithFields(log.Fields{
+				"error":     err,
+				"num_tries": frameNumber,
+			}).Error("Error validating TrailCamData")
 
-		if tcs.Params.Debug {
-			tcs.debugImages(inputFile, frameBytes, croppedImg, numTries)
-		}
-
-		// Convert the image to PNG format.
-		var buf bytes.Buffer
-		if err := png.Encode(&buf, croppedImg); err != nil {
-			return err
-		}
-		pngBytes := buf.Bytes()
-
-		// Perform optical character recognition (OCR) on the PNG data to extract the text.
-		rawText, err = tcs.performOCR(pngBytes)
-		if err != nil {
-			log.WithField("error", err).Error("Error performing OCR")
+			frameNumber++
 			continue
 		}
 
 		log.WithFields(log.Fields{
-			"event":    "performed_ocr",
-			"raw_text": rawText,
-		}).Info("OCR: Extracted raw text")
+			"trail_cam_data": fmt.Sprintf("%+v", data),
+			"num_tries":      frameNumber,
+		}).Info("OCR: Extracted data")
 
 		// If OCR succeeds, break out of the retry loop.
 		break
 	}
-
-	// Parse data from the text.
-	data, err := tcs.parseTrailCamData(rawText)
-	if err != nil {
-		return err
-	}
-
-	log.WithFields(log.Fields{
-		"event":          "extracted_data",
-		"trail_cam_data": fmt.Sprintf("%+v", data),
-	}).Info("OCR: Extracted data")
 
 	// Construct an output path for the file.
 	outputPath, err := tcs.constructOutputPath(data)
@@ -341,15 +323,67 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 	return nil
 }
 
-// Reads the dimensions of an image file without loading the entire image into memory.
-func (tcs *TrailCamSorter) getImageDimensions(r io.Reader) (int, int, error) {
-	// Decode the image header to get the dimensions.
-	config, _, err := image.DecodeConfig(r)
-	if err != nil {
-		return 0, 0, err
+// Takes in a TrailCamData object and checks if its Timestamp field is not equal to zero,
+// and its CameraName field is not an empty string.
+// If either of these fields fails the validation, an error is returned.
+func (tcs *TrailCamSorter) validateTrailCamData(data TrailCamData) error {
+	var errs []string
+
+	// Check for valid Timestamp.
+	if data.Timestamp.IsZero() {
+		errs = append(errs, "field Timestamp is invalid")
 	}
 
-	return config.Width, config.Height, nil
+	// Check for empty CameraName.
+	if data.CameraName == "" {
+		errs = append(errs, "field CameraName is empty")
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf(strings.Join(errs, "; "))
+	}
+
+	return nil
+}
+
+// Calculates the pixel coordinates for each label defined in labelCoordinates
+// and returns a slice of bounding boxes. The bounding boxes are defined by their top-left
+// and bottom-right coordinates, relative to the input image dimensions provided as arguments.
+func (tcs *TrailCamSorter) processFrame(imgMat *gocv.Mat) []BoundingBox {
+	// Define the label coordinates.
+	labelCoordinates := map[string][]float64{
+		"Timestamp":  {0.487240, 0.972685, 0.233854, 0.054630},
+		"CameraName": {0.864844, 0.972685, 0.270313, 0.054630},
+	}
+
+	// Create a slice to store the bounding boxes.
+	boundingBoxes := []BoundingBox{}
+
+	// Loop through the label coordinates and create bounding boxes for each label.
+	for label, coords := range labelCoordinates {
+		// Calculate the pixel values for the bounding box.
+		x := coords[0]
+		y := coords[1]
+		w := coords[2]
+		h := coords[3]
+		width := float64(imgMat.Cols())
+		height := float64(imgMat.Rows())
+		left := (x - w/2) * width
+		top := (y - h/2) * height
+		right := (x + w/2) * width
+		bottom := (y + h/2) * height
+
+		// Create the bounding box struct.
+		boundingBox := BoundingBox{
+			Label: label,
+			Rect:  image.Rect(int(left), int(top), int(right), int(bottom)),
+		}
+
+		// Add the bounding box to the slice.
+		boundingBoxes = append(boundingBoxes, boundingBox)
+	}
+
+	return boundingBoxes
 }
 
 // Checks if the file extension is one of the supported video file extensions.
@@ -438,8 +472,8 @@ func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 	return nil
 }
 
-// Reads a frame from a video file at the specified frame number and returns the frame data as a PNG image.
-func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) ([]byte, error) {
+// Reads a frame from a video file at the specified frame number and returns the frame data as a Mat object.
+func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.Mat, error) {
 	// Open the video file
 	cap, err := gocv.VideoCaptureFile(inputFile)
 	if err != nil {
@@ -447,62 +481,66 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) ([]byte,
 	}
 	defer cap.Close()
 
+	// Get the total number of frames in the video
+	numFrames := cap.Get(gocv.VideoCaptureFrameCount)
+
+	// If frameNumber is greater than 0, multiply it by 24 to advance the video by seconds instead of frames
+	if frameNumber > 0 {
+		frameNumber = frameNumber * 24
+	}
+
+	// Ensure that frameNumber does not exceed the total number of frames in the video
+	frameNumber = int(math.Min(float64(frameNumber), numFrames))
+
 	// Move the video to the desired frame number
 	cap.Set(gocv.VideoCapturePosFrames, float64(frameNumber))
 
 	// Read the frame from the video
 	frame := gocv.NewMat()
-	defer frame.Close()
 	if ok := cap.Read(&frame); !ok {
 		return nil, fmt.Errorf("failed to read frame from video")
 	}
 
-	// Convert the frame to a PNG image
-	buf, err := gocv.IMEncode(".png", frame)
-	if err != nil {
-		return nil, err
-	}
-
-	return buf.GetBytes(), nil
+	return &frame, nil
 }
 
-// Takes an image in PNG format, along with the bottom and right arguments, and returns a new image that has been cropped to the specified dimensions.
-func (tcs *TrailCamSorter) cropImage(pngBytes []byte, bottom int, right int) (image.Image, error) {
-	// Decode the PNG data into an image
-	imgReader := bytes.NewReader(pngBytes)
-	imgDecoded, err := png.Decode(imgReader)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create a new box using the bottom and right arguments to crop the image
-	box := imgDecoded.Bounds()
-	box.Min.X = box.Max.X - right
-	box.Min.Y = box.Max.Y - bottom
-
-	// Crop the image using the box and return the result
-	return imgDecoded.(interface {
-		SubImage(r image.Rectangle) image.Image
-	}).SubImage(box), nil
-}
-
-func (tcs *TrailCamSorter) performOCR(pngBytes []byte) (string, error) {
-	// Create a new Tesseract client and set the image from the provided bytes
+// Performs OCR on a gocv.Mat object using Tesseract.
+// Returns the recognized text and any errors that occurred during the OCR process.
+func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
+	// Create a new Tesseract client.
 	client := gosseract.NewClient()
 	defer client.Close()
-	client.SetImageFromBytes(pngBytes)
 
-	// Set the PageSegMode to AUTO
-	if err := client.SetPageSegMode(gosseract.PSM_AUTO); err != nil {
+	// Convert the image to grayscale.
+	grayMat := gocv.NewMat()
+	defer grayMat.Close()
+	gocv.CvtColor(*imgMat, &grayMat, gocv.ColorBGRToGray)
+
+	// Convert the grayscale image to a PNG byte slice.
+	pngBytes, err := gocv.IMEncode(".png", grayMat)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode image: %v", err)
+	}
+
+	// Set the image from the PNG byte slice.
+	err = client.SetImageFromBytes(pngBytes.GetBytes())
+	if err != nil {
+		return "", fmt.Errorf("failed to set image: %v", err)
+	}
+
+	// Set the PageSegMode to AUTO.
+	err = client.SetPageSegMode(gosseract.PSM_AUTO)
+	if err != nil {
 		return "", fmt.Errorf("failed to set PageSegMode: %v", err)
 	}
 
-	//  Set the language to English
-	if err := client.SetLanguage("eng"); err != nil {
+	// Set the language to English.
+	err = client.SetLanguage("eng")
+	if err != nil {
 		return "", fmt.Errorf("failed to set Language: %v", err)
 	}
 
-	// Perform OCR on the image and return the resulting text
+	// Perform OCR on the image and return the resulting text.
 	text, err := client.Text()
 	if err != nil {
 		return "", err
@@ -514,58 +552,32 @@ func (tcs *TrailCamSorter) performOCR(pngBytes []byte) (string, error) {
 	return text, nil
 }
 
-// Parses the input text and extracts relevant data into a TrailCamData struct.
-func (tcs *TrailCamSorter) parseTrailCamData(text string) (TrailCamData, error) {
-	// Regex pattern to match timestamp.
-	tsMatch := regexp.MustCompile(`(\d{2}:\d{2}[AP]M\s+\d{1,2}/\d{1,2}/\d{4})`).FindStringSubmatch(text)
-	if tsMatch == nil {
-		return TrailCamData{}, fmt.Errorf("failed to extract timestamp from text: %s", text)
-	}
-	ts, err := time.Parse("03:04PM 01/02/2006", tsMatch[1])
-	if err != nil {
-		return TrailCamData{}, fmt.Errorf("failed to parse timestamp: %v", err)
-	}
-
-	// Regex pattern to match temperature.
-	var temp int = 0
-	var unit string = "F"
-	tempMatch := regexp.MustCompile(`(-?\d+|[A-Za-z]\d+)\s*°([CF])`).FindStringSubmatch(text)
-	if tempMatch != nil {
-		tempStr := tempMatch[1]
-		val, err := strconv.Atoi(tempStr)
-		if err == nil {
-			temp = val
+// Updates a TrailCamData object with OCR results for a label.
+func (tcs *TrailCamSorter) updateTrailCamData(data TrailCamData, label string, text string) TrailCamData {
+	switch label {
+	case "Timestamp":
+		timestamp, err := time.Parse("03:04PM 01/02/2006", text)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"error":    err,
+				"ocr_text": text,
+			}).Warn("Failed to parse timestamp")
+			timestamp = time.Time{}
 		}
-		unit = tempMatch[2]
+		data.Timestamp = timestamp
+	case "CameraName":
+		// Replace all non-alphanumeric characters with spaces.
+		regex := regexp.MustCompile("[^a-zA-Z0-9]+")
+		text = regex.ReplaceAllString(text, " ")
+		// Trim any leading or trailing spaces.
+		text = strings.TrimSpace(text)
+		// Convert to lowercase.
+		text = strings.ToLower(text)
+		// Replace spaces with hyphens.
+		text = strings.ReplaceAll(text, " ", "-")
+		data.CameraName = text
 	}
-
-	// Regex pattern to match camera name.
-	cnMatch := regexp.MustCompile(`(\w+(?:\s+\w+)*)$`).FindStringSubmatch(text)
-	if cnMatch == nil {
-		return TrailCamData{}, fmt.Errorf("failed to extract camera name from text: %s", text)
-	}
-
-	cn := strings.TrimSpace(cnMatch[1])
-
-	// Sometimes the parsed camera name is prefixed with a single letter and a space.
-	// This happens because the OCR is seeing a symbol that represents the moon phase.
-	// Sometimes the moon phase symbol looks like a capital O.
-	// This is kinda hacky, but just trim off a single letter and a space.
-	if len(cn) > 1 && unicode.IsLetter(rune(cn[0])) && cn[1] == ' ' {
-		cn = cn[2:]
-	}
-	cn = strings.ReplaceAll(cn, " ", "-")
-	cn = strings.ToLower(cn)
-
-	// Create a new TrailCamData struct and return it.
-	data := TrailCamData{
-		Timestamp:       ts,
-		Temperature:     temp,
-		TemperatureUnit: unit,
-		CameraName:      cn,
-	}
-
-	return data, nil
+	return data
 }
 
 // Removes all empty directories that are subdirectories of the input directory.
@@ -617,68 +629,30 @@ func (tcs *TrailCamSorter) removeEmptyDirs() error {
 	return nil
 }
 
-// Write images to file for debugging purposes.
-func (tcs *TrailCamSorter) debugImages(inputFile string, frame []byte, croppedImg image.Image, numTries int) {
-	// Create the debug directory
-	debugDir := filepath.Join(tcs.Params.InputDir, "debug")
-	err := os.MkdirAll(debugDir, os.ModePerm)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"debugDir": debugDir,
-			"error":    err,
-		}).Debug("Error creating debug directory")
+// Write image to file for debugging.
+func (tcs *TrailCamSorter) debugImages(imgMat *gocv.Mat, filename string) error {
+	if !tcs.Params.Debug {
+		return nil
 	}
 
-	// Get the input file name without the extension
-	inputFileName := strings.TrimSuffix(filepath.Base(inputFile), filepath.Ext(inputFile))
+	// Get the directory path from the filename.
+	dir := filepath.Dir(filename)
 
-	// Decode the PNG image data into an image.Image object
-	frameImg, err := png.Decode(bytes.NewReader(frame))
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Debug("Error decoding frame")
-		return
+	// Create the directory if it doesn't exist.
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		err := os.MkdirAll(dir, 0755)
+		if err != nil {
+			return err
+		}
 	}
 
-	// Create the frame file
-	frameFilePath := filepath.Join(debugDir, fmt.Sprintf("%s-frame-%d.png", inputFileName, numTries))
-	frameFile, err := os.Create(frameFilePath)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"frame": frameFilePath,
-			"error": err,
-		}).Debug("Error creating file for frame")
-	}
-	defer frameFile.Close()
-
-	// Write the frame to a file
-	if err := png.Encode(frameFile, frameImg); err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Debug("Error writing frame to file")
+	// Save the image to a file.
+	success := gocv.IMWrite(filename, *imgMat)
+	if !success {
+		return errors.New("failed to write image to file")
 	}
 
-	// Create the cropped image file
-	croppedFilePath := filepath.Join(debugDir, fmt.Sprintf("%s-cropped-%d.png", inputFileName, numTries))
-	croppedFile, err := os.Create(croppedFilePath)
-	if err != nil {
-		log.WithFields(log.Fields{
-			"cropped": croppedFilePath,
-			"error":   err,
-		}).Debug("Error creating file for cropped image")
-	}
-	defer croppedFile.Close()
+	log.WithField("filename", filename).Debug("Debug images written")
 
-	// Write the cropped image to a file
-	if err := png.Encode(croppedFile, croppedImg); err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Debug("Error writing cropped image to file")
-	}
-
-	log.WithFields(log.Fields{
-		"frame":   frameFilePath,
-		"cropped": croppedFilePath,
-	}).Debug("Debug images written")
+	return nil
 }
