@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"os"
 	"path/filepath"
@@ -134,7 +135,7 @@ func (tcs *TrailCamSorter) processFiles() error {
 		go func() {
 			defer wg.Done()
 			for path := range filesChan {
-				if err := tcs.processFile(path); err != nil {
+				if err := tcs.processFrame(path); err != nil {
 					log.WithFields(log.Fields{
 						"path":  path,
 						"error": err,
@@ -227,23 +228,40 @@ func (tcs *TrailCamSorter) processFiles() error {
 	return nil
 }
 
+// Creates an OpenCV Mat containing a blank image of the specified width and height,
+// and adds the specified label to the image.
+// The function returns the resulting image as an OpenCV Mat.
+func (tcs *TrailCamSorter) createLabelImage(label string, width int, height int) gocv.Mat {
+	blankImage := gocv.NewMatWithSizeFromScalar(gocv.NewScalar(0, 0, 0, 0), height, width, gocv.MatTypeCV8UC3)
+
+	// Add the box label to the blank image.
+	labelColor := color.RGBA{255, 255, 255, 0}
+	labelFontScale := 1.0
+	labelThickness := 1
+	labelStr := fmt.Sprintf("%s: ", label)
+	labelOrigin := image.Point{10, 30}
+	gocv.PutText(&blankImage, labelStr, labelOrigin, gocv.FontHersheySimplex, labelFontScale, labelColor, labelThickness)
+
+	return blankImage
+}
+
 // Reads a frame from the video file, extracts the camera name,
 // time and date from the image, constructs an output path for the video file
 // based on this information, and moves the video file to the output path.
 // Returns an error if any of these steps fail.
-func (tcs *TrailCamSorter) processFile(inputFile string) error {
+func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 	var err error
 	var data TrailCamData
 
 	// Attempt to read the frame.
-	frameNumber := 1
-	for frameNumber <= 5 {
+	frameNumber := 0
+	for frameNumber <= 10 {
 		// Read a frame from the video file.
 		frame, err := tcs.readFrame(inputFile, frameNumber)
 		if frame == nil {
 			log.WithFields(log.Fields{
-				"error":     err,
-				"num_tries": frameNumber,
+				"error":        err,
+				"frame_number": frameNumber,
 			}).Error("Error frame is nil")
 			frameNumber++
 			continue
@@ -254,8 +272,8 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 
 		if err != nil {
 			log.WithFields(log.Fields{
-				"error":     err,
-				"num_tries": frameNumber,
+				"error":        err,
+				"frame_number": frameNumber,
 			}).Error("Error reading frame")
 			frameNumber++
 			continue
@@ -263,37 +281,39 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 		defer frame.Close()
 
 		// Create bounding boxes scaled to the width and height of the frame.
-		boundingBoxes := tcs.processFrame(frame)
+		boundingBoxes := tcs.getBoundingBoxes(frame)
 
-		// Get data from the bounding boxes.
-		for _, box := range boundingBoxes {
-			cropped := frame.Region(box.Rect)
-			defer cropped.Close()
-
-			// Write cropped image to file for debugging.
-			tcs.debugImages(&cropped, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label)))
-
-			text, err := tcs.performOCR(&cropped)
-			if err != nil {
-				log.WithFields(log.Fields{
-					"error":    err,
-					"ocr_text": text,
-				}).Error(fmt.Sprintf("Error performing OCR for %s", box.Label))
-				continue
-			}
+		// Create the joined image.
+		joined, err := tcs.createJoinedImage(inputFile, frameNumber, boundingBoxes, frame)
+		if err != nil {
 			log.WithFields(log.Fields{
-				"ocr_text": text,
-			}).Debug(fmt.Sprintf("OCR: %s", box.Label))
-
-			data = tcs.updateTrailCamData(data, box.Label, text)
+				"error": err,
+			}).Error("Error creating joined image")
+			frameNumber++
+			continue
 		}
+		defer joined.Close()
+
+		// Perform OCR on the joined image.
+		text, err := tcs.performOCR(joined)
+		if err != nil {
+			log.WithFields(log.Fields{
+				"error":    err,
+				"ocr_text": text,
+			}).Error("Error performing OCR")
+			frameNumber++
+			continue
+		}
+
+		// Update the TrailCamData object with the extracted data.
+		data = tcs.parseOCRText(data, text)
 
 		// Validate the TrailCamData.
 		err = tcs.validateTrailCamData(data)
 		if err != nil {
 			log.WithFields(log.Fields{
-				"error":     err,
-				"num_tries": frameNumber,
+				"error":        err,
+				"frame_number": frameNumber,
 			}).Error("Error validating TrailCamData")
 
 			frameNumber++
@@ -302,8 +322,11 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 
 		log.WithFields(log.Fields{
 			"trail_cam_data": fmt.Sprintf("%+v", data),
-			"num_tries":      frameNumber,
-		}).Info("OCR: Extracted data")
+			"frame_number":   frameNumber,
+		}).Debug("OCR: Extracted data")
+
+		// Close the joined file explicitly.
+		joined.Close()
 
 		// If OCR succeeds, break out of the retry loop.
 		break
@@ -321,69 +344,6 @@ func (tcs *TrailCamSorter) processFile(inputFile string) error {
 	}
 
 	return nil
-}
-
-// Takes in a TrailCamData object and checks if its Timestamp field is not equal to zero,
-// and its CameraName field is not an empty string.
-// If either of these fields fails the validation, an error is returned.
-func (tcs *TrailCamSorter) validateTrailCamData(data TrailCamData) error {
-	var errs []string
-
-	// Check for valid Timestamp.
-	if data.Timestamp.IsZero() {
-		errs = append(errs, "field Timestamp is invalid")
-	}
-
-	// Check for empty CameraName.
-	if data.CameraName == "" {
-		errs = append(errs, "field CameraName is empty")
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
-	}
-
-	return nil
-}
-
-// Calculates the pixel coordinates for each label defined in labelCoordinates
-// and returns a slice of bounding boxes. The bounding boxes are defined by their top-left
-// and bottom-right coordinates, relative to the input image dimensions provided as arguments.
-func (tcs *TrailCamSorter) processFrame(imgMat *gocv.Mat) []BoundingBox {
-	// Define the label coordinates.
-	labelCoordinates := map[string][]float64{
-		"Timestamp":  {0.487240, 0.972685, 0.233854, 0.054630},
-		"CameraName": {0.864844, 0.972685, 0.270313, 0.054630},
-	}
-
-	// Create a slice to store the bounding boxes.
-	boundingBoxes := []BoundingBox{}
-
-	// Loop through the label coordinates and create bounding boxes for each label.
-	for label, coords := range labelCoordinates {
-		// Calculate the pixel values for the bounding box.
-		x := coords[0]
-		y := coords[1]
-		w := coords[2]
-		h := coords[3]
-		width := float64(imgMat.Cols())
-		height := float64(imgMat.Rows())
-		left := (x - w/2) * width
-		top := (y - h/2) * height
-		right := (x + w/2) * width
-		bottom := (y + h/2) * height
-
-		// Create the bounding box struct.
-		boundingBox := BoundingBox{
-			Label: label,
-			Rect:  image.Rect(int(left), int(top), int(right), int(bottom)),
-		}
-
-		// Add the bounding box to the slice.
-		boundingBoxes = append(boundingBoxes, boundingBox)
-	}
-
-	return boundingBoxes
 }
 
 // Checks if the file extension is one of the supported video file extensions.
@@ -440,6 +400,9 @@ func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) (string, error
 	return outputPath, nil
 }
 
+// This function renames a file from the source path to the destination path.
+// If DryRun is true, it logs the operation without actually renaming the file.
+// It creates the destination directory if it doesn't exist, and returns an error if any of the operations fail.
 func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 	// Return early if DryRun is true
 	if tcs.Params.DryRun {
@@ -484,9 +447,9 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.M
 	// Get the total number of frames in the video
 	numFrames := cap.Get(gocv.VideoCaptureFrameCount)
 
-	// If frameNumber is greater than 0, multiply it by 24 to advance the video by seconds instead of frames
+	// If frameNumber is greater than 0, set it as a percentage of numFrames
 	if frameNumber > 0 {
-		frameNumber = frameNumber * 24
+		frameNumber = int(float64(frameNumber) * numFrames / 10.0)
 	}
 
 	// Ensure that frameNumber does not exceed the total number of frames in the video
@@ -502,6 +465,105 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.M
 	}
 
 	return &frame, nil
+}
+
+// Calculates the pixel coordinates for each label defined in labelCoordinates
+// and returns a slice of bounding boxes. The bounding boxes are defined by their top-left
+// and bottom-right coordinates, relative to the input image dimensions provided as arguments.
+func (tcs *TrailCamSorter) getBoundingBoxes(imgMat *gocv.Mat) []BoundingBox {
+	// Define the label coordinates.
+	labelCoordinates := map[string][]float64{
+		"Timestamp":  {0.487240, 0.972685, 0.233854, 0.054630},
+		"CameraName": {0.864844, 0.972685, 0.270313, 0.054630},
+	}
+
+	// Create a slice to store the bounding boxes.
+	boundingBoxes := []BoundingBox{}
+
+	// Loop through the label coordinates and create bounding boxes for each label.
+	for label, coords := range labelCoordinates {
+		// Calculate the pixel values for the bounding box.
+		x := coords[0]
+		y := coords[1]
+		w := coords[2]
+		h := coords[3]
+		width := float64(imgMat.Cols())
+		height := float64(imgMat.Rows())
+		left := (x - w/2) * width
+		top := (y - h/2) * height
+		right := (x + w/2) * width
+		bottom := (y + h/2) * height
+
+		// Create the bounding box struct.
+		boundingBox := BoundingBox{
+			Label: label,
+			Rect:  image.Rect(int(left), int(top), int(right), int(bottom)),
+		}
+
+		// Add the bounding box to the slice.
+		boundingBoxes = append(boundingBoxes, boundingBox)
+	}
+
+	return boundingBoxes
+}
+
+// This function takes a video frame, a slice of bounding boxes, and a filepath, and returns a
+// concatenated image of the cropped bounding boxes and their labels. It first creates a container image
+// to hold the label and the cropped bounding box, overlays the cropped bounding box onto the label image,
+// concatenates the label image and the cropped bounding boxes, and writes the joined image to the specified filepath.
+// It returns an error if any of the image operations fail.
+func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, boundingBoxes []BoundingBox, frame *gocv.Mat) (*gocv.Mat, error) {
+	// Initialize the joined variable with an empty image of the correct size.
+	joined := gocv.NewMatWithSize(0, 0, gocv.MatTypeCV8UC3)
+	// Initialize the labelImage variable with an empty image of the correct size.
+	labelImage := gocv.NewMatWithSize(0, 0, gocv.MatTypeCV8UC3)
+	// Loop through each bounding box and crop out the image.
+	var croppedImages []gocv.Mat
+	for _, box := range boundingBoxes {
+		// Crop out the bounding box.
+		cropped := frame.Region(box.Rect)
+		defer cropped.Close()
+
+		// Create a blank container image to hold the label and the cropped bounding box.
+		labelImage = tcs.createLabelImage(box.Label, 800, 60)
+
+		// Overlay the cropped image onto the label image.
+		roi := labelImage.Region(image.Rectangle{Min: image.Point{0, 0}, Max: image.Point{labelImage.Cols(), labelImage.Rows()}})
+		cropOrigin := image.Point{labelImage.Cols() - cropped.Cols(), 0}
+		croppedRoi := roi.Region(image.Rectangle{Min: cropOrigin, Max: cropOrigin.Add(image.Point{cropped.Cols(), cropped.Rows()})})
+		cropped.CopyTo(&croppedRoi)
+
+		// Write cropped image to file for debugging.
+		tcs.debugImages(&cropped, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label)))
+
+		// Write images to file for debugging.
+		tcs.debugImages(&labelImage, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label+"-label")))
+
+		croppedImages = append(croppedImages, labelImage)
+	}
+
+	// Concatenate the cropped images.
+	for i := 0; i < len(croppedImages); i++ {
+		if joined.Empty() {
+			// If joined is empty, assign it to the first cropped image.
+			joined = croppedImages[i]
+		} else {
+			// Otherwise, concatenate the cropped image to the bottom of joined.
+			gocv.Vconcat(joined, croppedImages[i], &joined)
+		}
+	}
+
+	// Close the labelImage file explicitly.
+	labelImage.Close()
+
+	if joined.Empty() {
+		return nil, fmt.Errorf("joined image is empty")
+	}
+
+	// Write joined image to file for debugging.
+	tcs.debugImages(&joined, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "joined")))
+
+	return &joined, nil
 }
 
 // Performs OCR on a gocv.Mat object using Tesseract.
@@ -550,6 +612,43 @@ func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 	}
 
 	return text, nil
+}
+
+// Parse OCR text and update TrailCamData object.
+func (tcs *TrailCamSorter) parseOCRText(data TrailCamData, ocrText string) TrailCamData {
+	lines := strings.Split(ocrText, "\n")
+	for _, line := range lines {
+		parts := strings.Split(line, ": ")
+		if len(parts) == 2 {
+			label := strings.TrimSpace(parts[0])
+			text := strings.TrimSpace(parts[1])
+			data = tcs.updateTrailCamData(data, label, text)
+		}
+	}
+	return data
+}
+
+// Takes in a TrailCamData object and checks if its Timestamp field is not equal to zero,
+// and its CameraName field is not an empty string.
+// If either of these fields fails the validation, an error is returned.
+func (tcs *TrailCamSorter) validateTrailCamData(data TrailCamData) error {
+	var errs []string
+
+	// Check for valid Timestamp.
+	if data.Timestamp.IsZero() {
+		errs = append(errs, "field Timestamp is invalid")
+	}
+
+	// Check for empty CameraName.
+	if data.CameraName == "" {
+		errs = append(errs, "field CameraName is empty")
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf(strings.Join(errs, "; "))
+	}
+
+	return nil
 }
 
 // Updates a TrailCamData object with OCR results for a label.
