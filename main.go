@@ -733,7 +733,6 @@ func (tcs *TrailCamSorter) removeEmptyDirs() error {
 
 		return nil
 	})
-
 	if err != nil {
 		log.WithField("error", err).Error("Error removing empty directories")
 	}
@@ -752,7 +751,7 @@ func (tcs *TrailCamSorter) debugImages(imgMat *gocv.Mat, filename string) error 
 
 	// Create the directory if it doesn't exist.
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		err := os.MkdirAll(dir, 0755)
+		err := os.MkdirAll(dir, 0o755)
 		if err != nil {
 			return err
 		}
