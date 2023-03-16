@@ -34,13 +34,13 @@ type SorterParams struct {
 	Workers   int    // the number of workers used to process files
 }
 
-// A struct that contains the extracted data from a Trail Cam image.
+// TrailCamData a struct that contains the extracted data from a Trail Cam image.
 type TrailCamData struct {
 	Timestamp  time.Time // The timestamp of the observation (including both time and date).
 	CameraName string    // The name of the camera that captured the observation.
 }
 
-// Represents a rectangular region in an image, identified by a label string and a corresponding image.Rectangle.
+// BoundingBox represents a rectangular region in an image, identified by a label string and a corresponding image.Rectangle.
 type BoundingBox struct {
 	Label string          // Label associated with this bounding box.
 	Rect  image.Rectangle // Rectangle specifying the region in the image.
