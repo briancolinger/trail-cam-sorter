@@ -46,9 +46,6 @@ type BoundingBox struct {
 	Rect  image.Rectangle // Rectangle specifying the region in the image.
 }
 
-// ErrUnsupportedImageDimensions is an error that is returned when the image dimensions are unsupported.
-var ErrUnsupportedImageDimensions = errors.New("unsupported image dimensions")
-
 // Entry point of the TrailCamSorter program.
 // Creates a new instance.
 // Parses the command line arguments.
