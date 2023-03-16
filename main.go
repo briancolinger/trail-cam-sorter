@@ -268,7 +268,11 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 		}
 
 		// Write frame to file for debugging.
-		tcs.debugImages(frame, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame")))
+		err = tcs.debugImages(frame, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame")))
+		if err != nil {
+			frameNumber++
+			continue
+		}
 
 		if err != nil {
 			log.WithFields(log.Fields{
@@ -534,10 +538,16 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 		cropped.CopyTo(&croppedRoi)
 
 		// Write cropped image to file for debugging.
-		tcs.debugImages(&cropped, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label)))
+		err := tcs.debugImages(&cropped, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label)))
+		if err != nil {
+			continue
+		}
 
 		// Write images to file for debugging.
-		tcs.debugImages(&labelImage, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label+"-label")))
+		err = tcs.debugImages(&labelImage, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label+"-label")))
+		if err != nil {
+			continue
+		}
 
 		croppedImages = append(croppedImages, labelImage)
 	}
@@ -561,7 +571,10 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 	}
 
 	// Write joined image to file for debugging.
-	tcs.debugImages(&joined, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "joined")))
+	err := tcs.debugImages(&joined, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "joined")))
+	if err != nil {
+		return nil, err
+	}
 
 	return &joined, nil
 }
