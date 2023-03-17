@@ -19,6 +19,17 @@ import (
 	"gocv.io/x/gocv"
 )
 
+var (
+	errMissingInputDir      = errors.New("please specify input directory")
+	errMissingOutputDir     = errors.New("please specify output directory")
+	errLimitReached         = errors.New("limit reached")
+	errFailedToReadFrame    = errors.New("failed to read frame from video")
+	errJoinedImageIsEmpty   = errors.New("joined image is empty")
+	errOCRReturnedEmptyText = errors.New("OCR returned empty text")
+	errInvalidTrailCamData  = errors.New("invalid TrailCamData")
+	errImageWrite           = errors.New("failed to write image to file")
+)
+
 // TrailCamSorter is a struct that represents a trail camera video file sorter.
 type TrailCamSorter struct {
 	Params SorterParams // holds the command line flags
@@ -109,9 +120,13 @@ func (tcs *TrailCamSorter) parseFlags() error {
 	// Parse the command line flags
 	flag.Parse()
 
-	// Check that the required inputDir and outputDir flags are set
-	if tcs.Params.InputDir == "" || tcs.Params.OutputDir == "" {
-		return fmt.Errorf("please specify inputdir and outputdir")
+	// Check that the required input directory flag is set.
+	if tcs.Params.InputDir == "" {
+		return fmt.Errorf("%w", errMissingInputDir)
+	}
+	// Check that the required output directory flag is set.
+	if tcs.Params.OutputDir == "" {
+		return fmt.Errorf("%w", errMissingOutputDir)
 	}
 
 	return nil
@@ -199,7 +214,7 @@ func (tcs *TrailCamSorter) processFiles() error {
 		}
 
 		if tcs.Params.Limit > 0 && count >= tcs.Params.Limit {
-			return fmt.Errorf("limit reached")
+			return fmt.Errorf("%w", errLimitReached)
 		}
 
 		filesChan <- path
@@ -208,7 +223,7 @@ func (tcs *TrailCamSorter) processFiles() error {
 		return nil
 	})
 
-	if err != nil && err.Error() != "limit reached" {
+	if err != nil && !errors.Is(err, errLimitReached) {
 		log.WithError(err).Info("Error occurred")
 	}
 
@@ -462,7 +477,7 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.M
 	// Read the frame from the video
 	frame := gocv.NewMat()
 	if ok := cap.Read(&frame); !ok {
-		return nil, fmt.Errorf("failed to read frame from video")
+		return nil, fmt.Errorf("%w", errFailedToReadFrame)
 	}
 
 	return &frame, nil
@@ -564,7 +579,7 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 	labelImage.Close()
 
 	if joined.Empty() {
-		return nil, fmt.Errorf("joined image is empty")
+		return nil, fmt.Errorf("%w", errJoinedImageIsEmpty)
 	}
 
 	// Write joined image to file for debugging.
@@ -591,25 +606,25 @@ func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 	// Convert the grayscale image to a PNG byte slice.
 	pngBytes, err := gocv.IMEncode(".png", grayMat)
 	if err != nil {
-		return "", fmt.Errorf("failed to encode image: %v", err)
+		return "", err
 	}
 
 	// Set the image from the PNG byte slice.
 	err = client.SetImageFromBytes(pngBytes.GetBytes())
 	if err != nil {
-		return "", fmt.Errorf("failed to set image: %v", err)
+		return "", err
 	}
 
 	// Set the PageSegMode to AUTO.
 	err = client.SetPageSegMode(gosseract.PSM_AUTO)
 	if err != nil {
-		return "", fmt.Errorf("failed to set PageSegMode: %v", err)
+		return "", err
 	}
 
 	// Set the language to English.
 	err = client.SetLanguage("eng")
 	if err != nil {
-		return "", fmt.Errorf("failed to set Language: %v", err)
+		return "", err
 	}
 
 	// Perform OCR on the image and return the resulting text.
@@ -618,7 +633,7 @@ func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 		return "", err
 	}
 	if len(text) == 0 {
-		return "", fmt.Errorf("OCR failed: no text returned")
+		return "", fmt.Errorf("%w", errOCRReturnedEmptyText)
 	}
 
 	return text, nil
@@ -655,7 +670,7 @@ func (tcs *TrailCamSorter) validateTrailCamData(data TrailCamData) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return fmt.Errorf("%w: %s", errInvalidTrailCamData, strings.Join(errs, "; "))
 	}
 
 	return nil
@@ -757,7 +772,7 @@ func (tcs *TrailCamSorter) debugImages(imgMat *gocv.Mat, filename string) error 
 	// Save the image to a file.
 	success := gocv.IMWrite(filename, *imgMat)
 	if !success {
-		return errors.New("failed to write image to file")
+		return fmt.Errorf("%w", errImageWrite)
 	}
 
 	log.WithField("filename", filename).Debug("Debug images written")
