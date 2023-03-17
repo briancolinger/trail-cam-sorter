@@ -134,8 +134,10 @@ func (tcs *TrailCamSorter) parseFlags() error {
 // Walks through the input directory and processes all video files by calling processFile on each file.
 // It returns an error if there is an error walking the input directory.
 func (tcs *TrailCamSorter) processFiles() {
+	const bufferSize = 100
+
 	// Create a buffered channel to receive file paths
-	filesChan := make(chan string, 100)
+	filesChan := make(chan string, bufferSize)
 
 	// Use a WaitGroup to wait for all goroutines to complete
 	var wg sync.WaitGroup
@@ -175,14 +177,13 @@ func (tcs *TrailCamSorter) processFiles() {
 					"error": err,
 				}).Warn("Skipping directory due to permission issue")
 				return filepath.SkipDir
-			} else {
-				// Handle other errors.
-				log.WithFields(log.Fields{
-					"path":  path,
-					"error": err,
-				}).Error("Error accessing path")
-				return nil
 			}
+			// Handle other errors.
+			log.WithFields(log.Fields{
+				"path":  path,
+				"error": err,
+			}).Error("Error accessing path")
+			return nil
 		}
 
 		if info.IsDir() {
@@ -471,8 +472,9 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.M
 	numFrames := cap.Get(gocv.VideoCaptureFrameCount)
 
 	// If frameNumber is greater than 0, set it as a percentage of numFrames
+	const frameNumberPercent = 0.1
 	if frameNumber > 0 {
-		frameNumber = int(float64(frameNumber) * numFrames / 10.0)
+		frameNumber = int(float64(frameNumber) * numFrames / frameNumberPercent)
 	}
 
 	// Ensure that frameNumber does not exceed the total number of frames in the video
@@ -552,7 +554,10 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 		}()
 
 		// Create a blank container image to hold the label and the cropped bounding box.
-		labelImage = tcs.createLabelImage(box.Label, 800, 60)
+		const labelImageWidth = 800
+		const labelImageHeight = 800
+
+		labelImage = tcs.createLabelImage(box.Label, labelImageWidth, labelImageHeight)
 
 		// Overlay the cropped image onto the label image.
 		roi := labelImage.Region(image.Rectangle{Min: image.Point{0, 0}, Max: image.Point{labelImage.Cols(), labelImage.Rows()}})
@@ -675,10 +680,12 @@ func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 
 // Parse OCR text and update TrailCamData object.
 func (tcs *TrailCamSorter) parseOCRText(data TrailCamData, ocrText string) TrailCamData {
+	const partsLength = 2
+
 	lines := strings.Split(ocrText, "\n")
 	for _, line := range lines {
 		parts := strings.Split(line, ": ")
-		if len(parts) == 2 {
+		if len(parts) == partsLength {
 			label := strings.TrimSpace(parts[0])
 			text := strings.TrimSpace(parts[1])
 			data = tcs.updateTrailCamData(data, label, text)
@@ -796,9 +803,11 @@ func (tcs *TrailCamSorter) debugImages(imgMat *gocv.Mat, filename string) error 
 	// Get the directory path from the filename.
 	dir := filepath.Dir(filename)
 
+	const DirPerm = 0o755
+
 	// Create the directory if it doesn't exist.
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		err := os.MkdirAll(dir, 0o755)
+		err := os.MkdirAll(dir, DirPerm)
 		if err != nil {
 			return err
 		}
