@@ -91,12 +91,7 @@ func main() {
 	}
 
 	// Process the files
-	err = tcs.processFiles()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Fatal("Error processing files")
-	}
+	tcs.processFiles()
 
 	// Remove all empty directories in InputDir
 	if err := tcs.removeEmptyDirs(); err != nil {
@@ -138,7 +133,7 @@ func (tcs *TrailCamSorter) parseFlags() error {
 
 // Walks through the input directory and processes all video files by calling processFile on each file.
 // It returns an error if there is an error walking the input directory.
-func (tcs *TrailCamSorter) processFiles() error {
+func (tcs *TrailCamSorter) processFiles() {
 	// Create a buffered channel to receive file paths
 	filesChan := make(chan string, 100)
 
@@ -218,7 +213,7 @@ func (tcs *TrailCamSorter) processFiles() error {
 		}
 
 		if tcs.Params.Limit > 0 && count >= tcs.Params.Limit {
-			return fmt.Errorf("%w", errLimitReached)
+			return errLimitReached
 		}
 
 		filesChan <- path
@@ -240,8 +235,6 @@ func (tcs *TrailCamSorter) processFiles() error {
 	log.WithFields(log.Fields{
 		"count": count,
 	}).Info("Processed files")
-
-	return nil
 }
 
 // Creates an OpenCV Mat containing a blank image of the specified width and height,
@@ -266,7 +259,6 @@ func (tcs *TrailCamSorter) createLabelImage(label string, width int, height int)
 // based on this information, and moves the video file to the output path.
 // Returns an error if any of these steps fail.
 func (tcs *TrailCamSorter) processFrame(inputFile string) error {
-	var err error
 	var data TrailCamData
 
 	// Attempt to read the frame.
@@ -353,10 +345,7 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 	}
 
 	// Construct an output path for the file.
-	outputPath, err := tcs.constructOutputPath(data)
-	if err != nil {
-		return err
-	}
+	outputPath := tcs.constructOutputPath(data)
 
 	// Rename the file.
 	if err := tcs.renameFile(inputFile, outputPath); err != nil {
@@ -396,7 +385,7 @@ func (tcs *TrailCamSorter) hasVideoFileExtension(path string) bool {
 // The output path has the format: OutputDir/CameraName/Date/CameraName-Date-Time.avi
 // If a file already exists at the output path, a suffix is added to the file name.
 // Returns the constructed output path and an error, if any.
-func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) (string, error) {
+func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) string {
 	// Define the format for the output path
 	outputPathFormat := filepath.Join(tcs.Params.OutputDir, data.CameraName, data.Timestamp.Format("2006-01-02"), "%s-%s-%s.avi")
 
@@ -417,7 +406,7 @@ func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) (string, error
 	}
 
 	// Return the constructed output path
-	return outputPath, nil
+	return outputPath
 }
 
 // This function renames a file from the source path to the destination path.
@@ -751,6 +740,7 @@ func (tcs *TrailCamSorter) removeEmptyDirs() error {
 	})
 	if err != nil {
 		log.WithField("error", err).Error("Error removing empty directories")
+		return err // Return the error value
 	}
 
 	return nil
