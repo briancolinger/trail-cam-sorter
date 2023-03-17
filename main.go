@@ -1,3 +1,7 @@
+// Package TrailCamSorter provides functionality to sort and process trail camera footage.
+// The TrailCamSorter struct provides methods to read, sort, and process trail camera data
+// for further analysis or storage. This package also includes utility functions for handling
+// common tasks such as file I/O and timestamp manipulation.
 package main
 
 import (
