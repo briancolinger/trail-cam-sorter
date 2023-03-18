@@ -537,7 +537,7 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 
 		// Create a blank container image to hold the label and the cropped bounding box.
 		const labelImageWidth = 800
-		const labelImageHeight = 800
+		const labelImageHeight = 60
 
 		labelImage = tcs.createLabelImage(box.Label, labelImageWidth, labelImageHeight)
 
