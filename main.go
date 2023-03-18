@@ -1,3 +1,7 @@
+// Package TrailCamSorter provides functionality to sort and process trail camera footage.
+// The TrailCamSorter struct provides methods to read, sort, and process trail camera data
+// for further analysis or storage. This package also includes utility functions for handling
+// common tasks such as file I/O and timestamp manipulation.
 package main
 
 import (
@@ -19,6 +23,17 @@ import (
 	"gocv.io/x/gocv"
 )
 
+var (
+	errMissingInputDir      = errors.New("please specify input directory")
+	errMissingOutputDir     = errors.New("please specify output directory")
+	errLimitReached         = errors.New("limit reached")
+	errFailedToReadFrame    = errors.New("failed to read frame from video")
+	errJoinedImageIsEmpty   = errors.New("joined image is empty")
+	errOCRReturnedEmptyText = errors.New("OCR returned empty text")
+	errInvalidTrailCamData  = errors.New("invalid TrailCamData")
+	errImageWrite           = errors.New("failed to write image to file")
+)
+
 // TrailCamSorter is a struct that represents a trail camera video file sorter.
 type TrailCamSorter struct {
 	Params SorterParams // holds the command line flags
@@ -34,20 +49,17 @@ type SorterParams struct {
 	Workers   int    // the number of workers used to process files
 }
 
-// A struct that contains the extracted data from a Trail Cam image.
+// TrailCamData a struct that contains the extracted data from a Trail Cam image.
 type TrailCamData struct {
 	Timestamp  time.Time // The timestamp of the observation (including both time and date).
 	CameraName string    // The name of the camera that captured the observation.
 }
 
-// Represents a rectangular region in an image, identified by a label string and a corresponding image.Rectangle.
+// BoundingBox represents a rectangular region in an image, identified by a label string and a corresponding image.Rectangle.
 type BoundingBox struct {
 	Label string          // Label associated with this bounding box.
 	Rect  image.Rectangle // Rectangle specifying the region in the image.
 }
-
-// ErrUnsupportedImageDimensions is an error that is returned when the image dimensions are unsupported.
-var ErrUnsupportedImageDimensions = errors.New("unsupported image dimensions")
 
 // Entry point of the TrailCamSorter program.
 // Creates a new instance.
@@ -79,12 +91,7 @@ func main() {
 	}
 
 	// Process the files
-	err = tcs.processFiles()
-	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Fatal("Error processing files")
-	}
+	tcs.processFiles()
 
 	// Remove all empty directories in InputDir
 	if err := tcs.removeEmptyDirs(); err != nil {
@@ -112,9 +119,13 @@ func (tcs *TrailCamSorter) parseFlags() error {
 	// Parse the command line flags
 	flag.Parse()
 
-	// Check that the required inputDir and outputDir flags are set
-	if tcs.Params.InputDir == "" || tcs.Params.OutputDir == "" {
-		return fmt.Errorf("please specify inputdir and outputdir")
+	// Check that the required input directory flag is set.
+	if tcs.Params.InputDir == "" {
+		return fmt.Errorf("%w", errMissingInputDir)
+	}
+	// Check that the required output directory flag is set.
+	if tcs.Params.OutputDir == "" {
+		return fmt.Errorf("%w", errMissingOutputDir)
 	}
 
 	return nil
@@ -122,9 +133,11 @@ func (tcs *TrailCamSorter) parseFlags() error {
 
 // Walks through the input directory and processes all video files by calling processFile on each file.
 // It returns an error if there is an error walking the input directory.
-func (tcs *TrailCamSorter) processFiles() error {
+func (tcs *TrailCamSorter) processFiles() {
+	const bufferSize = 100
+
 	// Create a buffered channel to receive file paths
-	filesChan := make(chan string, 100)
+	filesChan := make(chan string, bufferSize)
 
 	// Use a WaitGroup to wait for all goroutines to complete
 	var wg sync.WaitGroup
@@ -164,14 +177,13 @@ func (tcs *TrailCamSorter) processFiles() error {
 					"error": err,
 				}).Warn("Skipping directory due to permission issue")
 				return filepath.SkipDir
-			} else {
-				// Handle other errors.
-				log.WithFields(log.Fields{
-					"path":  path,
-					"error": err,
-				}).Error("Error accessing path")
-				return nil
 			}
+			// Handle other errors.
+			log.WithFields(log.Fields{
+				"path":  path,
+				"error": err,
+			}).Error("Error accessing path")
+			return nil
 		}
 
 		if info.IsDir() {
@@ -202,7 +214,7 @@ func (tcs *TrailCamSorter) processFiles() error {
 		}
 
 		if tcs.Params.Limit > 0 && count >= tcs.Params.Limit {
-			return fmt.Errorf("limit reached")
+			return errLimitReached
 		}
 
 		filesChan <- path
@@ -211,7 +223,7 @@ func (tcs *TrailCamSorter) processFiles() error {
 		return nil
 	})
 
-	if err != nil && err.Error() != "limit reached" {
+	if err != nil && !errors.Is(err, errLimitReached) {
 		log.WithError(err).Info("Error occurred")
 	}
 
@@ -224,8 +236,6 @@ func (tcs *TrailCamSorter) processFiles() error {
 	log.WithFields(log.Fields{
 		"count": count,
 	}).Info("Processed files")
-
-	return nil
 }
 
 // Creates an OpenCV Mat containing a blank image of the specified width and height,
@@ -250,7 +260,6 @@ func (tcs *TrailCamSorter) createLabelImage(label string, width int, height int)
 // based on this information, and moves the video file to the output path.
 // Returns an error if any of these steps fail.
 func (tcs *TrailCamSorter) processFrame(inputFile string) error {
-	var err error
 	var data TrailCamData
 
 	// Attempt to read the frame.
@@ -268,7 +277,11 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 		}
 
 		// Write frame to file for debugging.
-		tcs.debugImages(frame, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame")))
+		err = tcs.debugImages(frame, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame")))
+		if err != nil {
+			frameNumber++
+			continue
+		}
 
 		if err != nil {
 			log.WithFields(log.Fields{
@@ -278,7 +291,16 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 			frameNumber++
 			continue
 		}
-		defer frame.Close()
+
+		// Close the frame when the function completes (either normally or with an error).
+		defer func() {
+			if err := frame.Close(); err != nil {
+				log.WithFields(log.Fields{
+					"error":        err,
+					"frame_number": frameNumber,
+				}).Error("Error closing frame")
+			}
+		}()
 
 		// Create bounding boxes scaled to the width and height of the frame.
 		boundingBoxes := tcs.getBoundingBoxes(frame)
@@ -292,7 +314,6 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 			frameNumber++
 			continue
 		}
-		defer joined.Close()
 
 		// Perform OCR on the joined image.
 		text, err := tcs.performOCR(joined)
@@ -326,17 +347,16 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 		}).Debug("OCR: Extracted data")
 
 		// Close the joined file explicitly.
-		joined.Close()
+		if err := joined.Close(); err != nil {
+			return err
+		}
 
 		// If OCR succeeds, break out of the retry loop.
 		break
 	}
 
 	// Construct an output path for the file.
-	outputPath, err := tcs.constructOutputPath(data)
-	if err != nil {
-		return err
-	}
+	outputPath := tcs.constructOutputPath(data)
 
 	// Rename the file.
 	if err := tcs.renameFile(inputFile, outputPath); err != nil {
@@ -376,7 +396,7 @@ func (tcs *TrailCamSorter) hasVideoFileExtension(path string) bool {
 // The output path has the format: OutputDir/CameraName/Date/CameraName-Date-Time.avi
 // If a file already exists at the output path, a suffix is added to the file name.
 // Returns the constructed output path and an error, if any.
-func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) (string, error) {
+func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) string {
 	// Define the format for the output path
 	outputPathFormat := filepath.Join(tcs.Params.OutputDir, data.CameraName, data.Timestamp.Format("2006-01-02"), "%s-%s-%s.avi")
 
@@ -397,7 +417,7 @@ func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) (string, error
 	}
 
 	// Return the constructed output path
-	return outputPath, nil
+	return outputPath
 }
 
 // This function renames a file from the source path to the destination path.
@@ -442,14 +462,19 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.M
 	if err != nil {
 		return nil, err
 	}
-	defer cap.Close()
+	defer func() {
+		if err := cap.Close(); err != nil {
+			log.WithError(err).Error("Error closing video capture")
+		}
+	}()
 
 	// Get the total number of frames in the video
 	numFrames := cap.Get(gocv.VideoCaptureFrameCount)
 
 	// If frameNumber is greater than 0, set it as a percentage of numFrames
+	const frameNumberPercent = 0.1
 	if frameNumber > 0 {
-		frameNumber = int(float64(frameNumber) * numFrames / 10.0)
+		frameNumber = int(float64(frameNumber) * numFrames / frameNumberPercent)
 	}
 
 	// Ensure that frameNumber does not exceed the total number of frames in the video
@@ -461,7 +486,7 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.M
 	// Read the frame from the video
 	frame := gocv.NewMat()
 	if ok := cap.Read(&frame); !ok {
-		return nil, fmt.Errorf("failed to read frame from video")
+		return nil, fmt.Errorf("%w", errFailedToReadFrame)
 	}
 
 	return &frame, nil
@@ -522,10 +547,22 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 	for _, box := range boundingBoxes {
 		// Crop out the bounding box.
 		cropped := frame.Region(box.Rect)
-		defer cropped.Close()
+		defer func() {
+			if err := cropped.Close(); err != nil {
+				log.WithField("error", err).Error("Error closing cropped image")
+			}
+		}()
 
 		// Create a blank container image to hold the label and the cropped bounding box.
-		labelImage = tcs.createLabelImage(box.Label, 800, 60)
+		const labelImageWidth = 800
+		const labelImageHeight = 60
+
+		labelImage = tcs.createLabelImage(box.Label, labelImageWidth, labelImageHeight)
+		defer func() {
+			if err := labelImage.Close(); err != nil {
+				log.WithField("error", err).Error("Error closing label image")
+			}
+		}()
 
 		// Overlay the cropped image onto the label image.
 		roi := labelImage.Region(image.Rectangle{Min: image.Point{0, 0}, Max: image.Point{labelImage.Cols(), labelImage.Rows()}})
@@ -534,10 +571,16 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 		cropped.CopyTo(&croppedRoi)
 
 		// Write cropped image to file for debugging.
-		tcs.debugImages(&cropped, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label)))
+		err := tcs.debugImages(&cropped, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label)))
+		if err != nil {
+			continue
+		}
 
 		// Write images to file for debugging.
-		tcs.debugImages(&labelImage, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label+"-label")))
+		err = tcs.debugImages(&labelImage, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label+"-label")))
+		if err != nil {
+			continue
+		}
 
 		croppedImages = append(croppedImages, labelImage)
 	}
@@ -553,15 +596,15 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 		}
 	}
 
-	// Close the labelImage file explicitly.
-	labelImage.Close()
-
 	if joined.Empty() {
-		return nil, fmt.Errorf("joined image is empty")
+		return nil, fmt.Errorf("%w", errJoinedImageIsEmpty)
 	}
 
 	// Write joined image to file for debugging.
-	tcs.debugImages(&joined, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "joined")))
+	err := tcs.debugImages(&joined, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "joined")))
+	if err != nil {
+		return nil, err
+	}
 
 	return &joined, nil
 }
@@ -571,35 +614,50 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 	// Create a new Tesseract client.
 	client := gosseract.NewClient()
-	defer client.Close()
+	defer func() {
+		err := client.Close()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"error": err,
+			}).Error("Error closing Tesseract client")
+		}
+	}()
 
 	// Convert the image to grayscale.
 	grayMat := gocv.NewMat()
-	defer grayMat.Close()
+	defer func() {
+		err := grayMat.Close()
+		if err != nil {
+			log.WithFields(log.Fields{
+				"error": err,
+			}).Error("Error closing grayMat")
+		}
+	}()
+
 	gocv.CvtColor(*imgMat, &grayMat, gocv.ColorBGRToGray)
 
 	// Convert the grayscale image to a PNG byte slice.
 	pngBytes, err := gocv.IMEncode(".png", grayMat)
 	if err != nil {
-		return "", fmt.Errorf("failed to encode image: %v", err)
+		return "", err
 	}
 
 	// Set the image from the PNG byte slice.
 	err = client.SetImageFromBytes(pngBytes.GetBytes())
 	if err != nil {
-		return "", fmt.Errorf("failed to set image: %v", err)
+		return "", err
 	}
 
 	// Set the PageSegMode to AUTO.
 	err = client.SetPageSegMode(gosseract.PSM_AUTO)
 	if err != nil {
-		return "", fmt.Errorf("failed to set PageSegMode: %v", err)
+		return "", err
 	}
 
 	// Set the language to English.
 	err = client.SetLanguage("eng")
 	if err != nil {
-		return "", fmt.Errorf("failed to set Language: %v", err)
+		return "", err
 	}
 
 	// Perform OCR on the image and return the resulting text.
@@ -608,7 +666,7 @@ func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 		return "", err
 	}
 	if len(text) == 0 {
-		return "", fmt.Errorf("OCR failed: no text returned")
+		return "", fmt.Errorf("%w", errOCRReturnedEmptyText)
 	}
 
 	return text, nil
@@ -616,10 +674,12 @@ func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 
 // Parse OCR text and update TrailCamData object.
 func (tcs *TrailCamSorter) parseOCRText(data TrailCamData, ocrText string) TrailCamData {
+	const partsLength = 2
+
 	lines := strings.Split(ocrText, "\n")
 	for _, line := range lines {
 		parts := strings.Split(line, ": ")
-		if len(parts) == 2 {
+		if len(parts) == partsLength {
 			label := strings.TrimSpace(parts[0])
 			text := strings.TrimSpace(parts[1])
 			data = tcs.updateTrailCamData(data, label, text)
@@ -645,7 +705,7 @@ func (tcs *TrailCamSorter) validateTrailCamData(data TrailCamData) error {
 	}
 
 	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return fmt.Errorf("%w: %s", errInvalidTrailCamData, strings.Join(errs, "; "))
 	}
 
 	return nil
@@ -720,9 +780,9 @@ func (tcs *TrailCamSorter) removeEmptyDirs() error {
 
 		return nil
 	})
-
 	if err != nil {
 		log.WithField("error", err).Error("Error removing empty directories")
+		return err // Return the error value
 	}
 
 	return nil
@@ -737,9 +797,11 @@ func (tcs *TrailCamSorter) debugImages(imgMat *gocv.Mat, filename string) error 
 	// Get the directory path from the filename.
 	dir := filepath.Dir(filename)
 
+	const DirPerm = 0o755
+
 	// Create the directory if it doesn't exist.
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		err := os.MkdirAll(dir, 0755)
+		err := os.MkdirAll(dir, DirPerm)
 		if err != nil {
 			return err
 		}
@@ -748,7 +810,7 @@ func (tcs *TrailCamSorter) debugImages(imgMat *gocv.Mat, filename string) error 
 	// Save the image to a file.
 	success := gocv.IMWrite(filename, *imgMat)
 	if !success {
-		return errors.New("failed to write image to file")
+		return fmt.Errorf("%w", errImageWrite)
 	}
 
 	log.WithField("filename", filename).Debug("Debug images written")
