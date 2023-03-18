@@ -291,16 +291,7 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 			frameNumber++
 			continue
 		}
-
-		// Close the frame when the function completes (either normally or with an error).
-		defer func() {
-			if err := frame.Close(); err != nil {
-				log.WithFields(log.Fields{
-					"error":        err,
-					"frame_number": frameNumber,
-				}).Error("Error closing frame")
-			}
-		}()
+		defer frame.Close()
 
 		// Create bounding boxes scaled to the width and height of the frame.
 		boundingBoxes := tcs.getBoundingBoxes(frame)
@@ -314,6 +305,7 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 			frameNumber++
 			continue
 		}
+		defer joined.Close()
 
 		// Perform OCR on the joined image.
 		text, err := tcs.performOCR(joined)
@@ -347,9 +339,7 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 		}).Debug("OCR: Extracted data")
 
 		// Close the joined file explicitly.
-		if err := joined.Close(); err != nil {
-			return err
-		}
+		joined.Close()
 
 		// If OCR succeeds, break out of the retry loop.
 		break
@@ -462,11 +452,7 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.M
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err := cap.Close(); err != nil {
-			log.WithError(err).Error("Error closing video capture")
-		}
-	}()
+	defer cap.Close()
 
 	// Get the total number of frames in the video
 	numFrames := cap.Get(gocv.VideoCaptureFrameCount)
@@ -547,11 +533,7 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 	for _, box := range boundingBoxes {
 		// Crop out the bounding box.
 		cropped := frame.Region(box.Rect)
-		defer func() {
-			if err := cropped.Close(); err != nil {
-				log.WithField("error", err).Error("Error closing cropped image")
-			}
-		}()
+		defer cropped.Close()
 
 		// Create a blank container image to hold the label and the cropped bounding box.
 		const labelImageWidth = 800
@@ -580,13 +562,6 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 		croppedImages = append(croppedImages, labelImage)
 	}
 
-	// Close all cropped images explicitly.
-	for _, croppedImage := range croppedImages {
-		if err := croppedImage.Close(); err != nil {
-			log.WithField("error", err).Error("Error closing cropped image")
-		}
-	}
-
 	// Concatenate the cropped images.
 	for i := 0; i < len(croppedImages); i++ {
 		if joined.Empty() {
@@ -599,9 +574,7 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 	}
 
 	// Close the labelImage file explicitly.
-	if err := labelImage.Close(); err != nil {
-		log.WithField("error", err).Error("Error closing label image")
-	}
+	labelImage.Close()
 
 	if joined.Empty() {
 		return nil, fmt.Errorf("%w", errJoinedImageIsEmpty)
@@ -621,25 +594,11 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 	// Create a new Tesseract client.
 	client := gosseract.NewClient()
-	defer func() {
-		err := client.Close()
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error": err,
-			}).Error("Error closing Tesseract client")
-		}
-	}()
+	defer client.Close()
 
 	// Convert the image to grayscale.
 	grayMat := gocv.NewMat()
-	defer func() {
-		err := grayMat.Close()
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error": err,
-			}).Error("Error closing grayMat")
-		}
-	}()
+	defer grayMat.Close()
 	gocv.CvtColor(*imgMat, &grayMat, gocv.ColorBGRToGray)
 
 	// Convert the grayscale image to a PNG byte slice.
