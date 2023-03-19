@@ -23,6 +23,35 @@ import (
 	"gocv.io/x/gocv"
 )
 
+type (
+	// TrailCamSorter is a struct that represents a trail camera video file sorter.
+	TrailCamSorter struct {
+		Params SorterParams // Holds the command line flags.
+	}
+
+	// SorterParams contains parameters for the TrailCamSorter.
+	SorterParams struct {
+		InputDir  string // The input directory containing video files.
+		OutputDir string // The output directory for sorted video files.
+		DryRun    bool   // If true, the files will not be moved.
+		Debug     bool   // Enables debug mode.
+		Limit     int    // Limits the number of files processed.
+		Workers   int    // The number of workers used to process files.
+	}
+
+	// TrailCamData a struct that contains the extracted data from a Trail Cam image.
+	TrailCamData struct {
+		Timestamp  time.Time // The timestamp of the observation (including both time and date).
+		CameraName string    // The name of the camera that captured the observation.
+	}
+
+	// BoundingBox represents a rectangular region in an image, identified by a label string and a corresponding image.Rectangle.
+	BoundingBox struct {
+		Label string          // Label associated with this bounding box.
+		Rect  image.Rectangle // Rectangle specifying the region in the image.
+	}
+)
+
 var (
 	errMissingInputDir      = errors.New("please specify input directory")
 	errMissingOutputDir     = errors.New("please specify output directory")
@@ -33,33 +62,6 @@ var (
 	errInvalidTrailCamData  = errors.New("invalid TrailCamData")
 	errImageWrite           = errors.New("failed to write image to file")
 )
-
-// TrailCamSorter is a struct that represents a trail camera video file sorter.
-type TrailCamSorter struct {
-	Params SorterParams // Holds the command line flags.
-}
-
-// SorterParams contains parameters for the TrailCamSorter.
-type SorterParams struct {
-	InputDir  string // The input directory containing video files.
-	OutputDir string // The output directory for sorted video files.
-	DryRun    bool   // If true, the files will not be moved.
-	Debug     bool   // Enables debug mode.
-	Limit     int    // Limits the number of files processed.
-	Workers   int    // The number of workers used to process files.
-}
-
-// TrailCamData a struct that contains the extracted data from a Trail Cam image.
-type TrailCamData struct {
-	Timestamp  time.Time // The timestamp of the observation (including both time and date).
-	CameraName string    // The name of the camera that captured the observation.
-}
-
-// BoundingBox represents a rectangular region in an image, identified by a label string and a corresponding image.Rectangle.
-type BoundingBox struct {
-	Label string          // Label associated with this bounding box.
-	Rect  image.Rectangle // Rectangle specifying the region in the image.
-}
 
 // Entry point of the TrailCamSorter program.
 // Creates a new instance.
