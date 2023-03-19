@@ -81,9 +81,7 @@ func main() {
 	// Parse the command line arguments.
 	params, err := parseFlags()
 	if err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Fatal("Error parsing flags")
+		log.WithFields(log.Fields{"error": err}).Fatal("Error parsing flags")
 	}
 
 	// Create a new TrailCamSorter instance.
@@ -99,14 +97,10 @@ func main() {
 
 	// Remove all empty directories in InputDir.
 	if err := tcs.removeEmptyDirs(); err != nil {
-		log.WithFields(log.Fields{
-			"error": err,
-		}).Error("Error removing empty directories")
+		log.WithFields(log.Fields{"error": err}).Error("Error removing empty directories")
 	}
 
-	log.WithFields(log.Fields{
-		"time_taken": time.Since(start),
-	}).Info("Done.")
+	log.WithFields(log.Fields{"time_taken": time.Since(start)}).Info("Done.")
 }
 
 // NewTrailCamSorter initializes a new TrailCamSorter with the provided
@@ -478,11 +472,7 @@ func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) string {
 func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 	// Return early if DryRun is true.
 	if tcs.Params.DryRun {
-		log.WithFields(log.Fields{
-			"type": "DRY RUN",
-			"src":  src,
-			"dest": dest,
-		}).Info("Skip renaming file")
+		log.WithFields(log.Fields{"type": "DRY RUN", "src": src, "dest": dest}).Info("Skip renaming file")
 		return nil
 	}
 
@@ -492,11 +482,7 @@ func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 		return err
 	}
 
-	log.WithFields(log.Fields{
-		"type": "RENAME",
-		"src":  src,
-		"dest": dest,
-	}).Info("Renaming file")
+	log.WithFields(log.Fields{"type": "RENAME", "src": src, "dest": dest}).Info("Renaming file")
 
 	// Rename the file.
 	err = os.Rename(src, dest)
@@ -677,9 +663,7 @@ func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 	defer func() {
 		err := client.Close()
 		if err != nil {
-			log.WithFields(log.Fields{
-				"error": err,
-			}).Error("Error closing Tesseract client")
+			log.WithFields(log.Fields{"error": err}).Error("Error closing Tesseract client")
 		}
 	}()
 
@@ -688,9 +672,7 @@ func (tcs *TrailCamSorter) performOCR(imgMat *gocv.Mat) (string, error) {
 	defer func() {
 		err := grayMat.Close()
 		if err != nil {
-			log.WithFields(log.Fields{
-				"error": err,
-			}).Error("Error closing grayMat")
+			log.WithFields(log.Fields{"error": err}).Error("Error closing grayMat")
 		}
 	}()
 
@@ -777,10 +759,7 @@ func (tcs *TrailCamSorter) updateTrailCamData(data TrailCamData, label string, t
 	case "Timestamp":
 		timestamp, err := time.Parse("03:04PM 01/02/2006", text)
 		if err != nil {
-			log.WithFields(log.Fields{
-				"error":    err,
-				"ocr_text": text,
-			}).Warn("Failed to parse timestamp")
+			log.WithFields(log.Fields{"error": err, "ocr_text": text}).Warn("Failed to parse timestamp")
 			timestamp = time.Time{}
 		}
 		data.Timestamp = timestamp
@@ -810,10 +789,7 @@ func (tcs *TrailCamSorter) removeEmptyDirs() error {
 	// Walk through the input directory and process each file.
 	err := filepath.Walk(tcs.Params.InputDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			log.WithFields(log.Fields{
-				"path":  path,
-				"error": err,
-			}).Error("Error accessing path")
+			log.WithFields(log.Fields{"path": path, "error": err}).Error("Error accessing path")
 			return nil
 		}
 
