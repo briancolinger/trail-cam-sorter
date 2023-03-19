@@ -7,7 +7,7 @@ linters:
     - decorder # Check declaration order and count of types, constants, variables and functions
     - errcheck # Detect unchecked errors
     - goconst # Detect repeated values that can be made constants
-    # - gocyclo # or "cyclop" # Detect cyclomatic complexity
+    - gocyclo # or "cyclop" # Detect cyclomatic complexity
     - godot # Check if comments end in a period
     - goerr113 # Enforce standard error handling practices
     - gofumpt # Or "gofmt" # Enforce standard formatting

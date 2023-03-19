@@ -26,7 +26,8 @@ import (
 type (
 	// TrailCamSorter is a struct that represents a trail camera video file sorter.
 	TrailCamSorter struct {
-		Params SorterParams // Holds the command line flags.
+		Params    SorterParams    // Holds the command line flags.
+		IgnoreMap map[string]bool // Holds the list of files and directories to ignore.
 	}
 
 	// SorterParams contains parameters for the TrailCamSorter.
@@ -77,16 +78,16 @@ func main() {
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.InfoLevel)
 
-	// Create a new TrailCamSorter instance.
-	tcs := &TrailCamSorter{}
-
 	// Parse the command line arguments.
-	err := tcs.parseFlags()
+	params, err := parseFlags()
 	if err != nil {
 		log.WithFields(log.Fields{
 			"error": err,
 		}).Fatal("Error parsing flags")
 	}
+
+	// Create a new TrailCamSorter instance.
+	tcs := NewTrailCamSorter(params)
 
 	// Change logging level if debugging.
 	if tcs.Params.Debug {
@@ -108,59 +109,49 @@ func main() {
 	}).Info("Done.")
 }
 
+// NewTrailCamSorter initializes a new TrailCamSorter with the provided
+// SorterParams and the default IgnoreMap.
+// It returns a pointer to the newly created TrailCamSorter.
+func NewTrailCamSorter(params SorterParams) *TrailCamSorter {
+	return &TrailCamSorter{
+		Params:    params,         // Set the provided SorterParams to the new instance.
+		IgnoreMap: getIgnoreMap(), // Initialize the IgnoreMap with default values.
+	}
+}
+
 // Parses the command line flags and stores the results in the TrailCamSorter instance.
 // Returns an error if required flags are not set.
-func (tcs *TrailCamSorter) parseFlags() error {
+func parseFlags() (SorterParams, error) {
+	var params SorterParams
+
 	// Set command line flags.
-	flag.StringVar(&tcs.Params.InputDir, "input", "", "the input directory containing video files")
-	flag.StringVar(&tcs.Params.OutputDir, "output", "", "the output directory for sorted video files")
-	flag.BoolVar(&tcs.Params.DryRun, "dry-run", true, "if true, the files will not be moved")
-	flag.BoolVar(&tcs.Params.Debug, "debug", false, "if true, enables debug mode")
-	flag.IntVar(&tcs.Params.Limit, "limit", math.MaxInt32, "limits the number of files processed")
-	flag.IntVar(&tcs.Params.Workers, "workers", 0, "the number of workers used to process files")
+	flag.StringVar(&params.InputDir, "input", "", "the input directory containing video files")
+	flag.StringVar(&params.OutputDir, "output", "", "the output directory for sorted video files")
+	flag.BoolVar(&params.DryRun, "dry-run", true, "if true, the files will not be moved")
+	flag.BoolVar(&params.Debug, "debug", false, "if true, enables debug mode")
+	flag.IntVar(&params.Limit, "limit", math.MaxInt32, "limits the number of files processed")
+	flag.IntVar(&params.Workers, "workers", 0, "the number of workers used to process files")
 
 	// Parse the command line flags.
 	flag.Parse()
 
 	// Check that the required input directory flag is set.
-	if tcs.Params.InputDir == "" {
-		return fmt.Errorf("%w", errMissingInputDir)
+	if params.InputDir == "" {
+		return params, fmt.Errorf("%w", errMissingInputDir)
 	}
 	// Check that the required output directory flag is set.
-	if tcs.Params.OutputDir == "" {
-		return fmt.Errorf("%w", errMissingOutputDir)
+	if params.OutputDir == "" {
+		return params, fmt.Errorf("%w", errMissingOutputDir)
 	}
 
-	return nil
+	return params, nil
 }
 
-// Walks through the input directory and processes all video files by calling processFile on each file.
-// It returns an error if there is an error walking the input directory.
-func (tcs *TrailCamSorter) processFiles() {
-	const bufferSize = 100
-
-	// Create a buffered channel to receive file paths.
-	filesChan := make(chan string, bufferSize)
-
-	// Use a WaitGroup to wait for all goroutines to complete.
-	var wg sync.WaitGroup
-
-	// Start the workers.
-	for i := 0; i < tcs.Params.Workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for path := range filesChan {
-				if err := tcs.processFrame(path); err != nil {
-					log.WithFields(log.Fields{
-						"path":  path,
-						"error": err,
-					}).Error("Error processing file")
-				}
-			}
-		}()
-	}
-
+// Generates a map containing the names of directories
+// and files that should be ignored while processing files. The keys of
+// the map are the names to be ignored, and the values are all set to
+// true for efficient lookups.
+func getIgnoreMap() map[string]bool {
 	// List of directory and file names to ignore.
 	ignoreNames := []string{
 		"$RECYCLE.BIN",
@@ -170,82 +161,146 @@ func (tcs *TrailCamSorter) processFiles() {
 		".Trashes",
 		".DS_Store",
 	}
-	// Convert the list of ignore names to a map for efficient lookup.
+
+	// Create an empty map to store the names to ignore.
 	ignoreMap := make(map[string]bool)
+
+	// Populate the ignoreMap with the names from the ignoreNames list.
 	for _, name := range ignoreNames {
 		ignoreMap[name] = true
 	}
 
-	// Walk through the input directory and send each file path to the channel.
-	var count int
-	err := filepath.Walk(tcs.Params.InputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			// Check if the error is due to a permission issue and skip the directory.
-			if os.IsPermission(err) {
-				log.WithFields(log.Fields{
-					"path":  path,
-					"error": err,
-				}).Warn("Skipping directory due to permission issue")
-				return filepath.SkipDir
-			}
-			// Handle other errors.
-			log.WithFields(log.Fields{
-				"path":  path,
-				"error": err,
-			}).Error("Error accessing path")
-			return nil
-		}
+	// Return the populated ignoreMap.
+	return ignoreMap
+}
 
-		if info.IsDir() {
-			// Check if the directory should be ignored.
-			dir := filepath.Base(path)
-			if ignoreMap[dir] {
-				log.WithFields(log.Fields{
-					"type": "directory",
-					"path": path,
-				}).Warn("Skipping ignored directory")
-				return filepath.SkipDir // Skip the directory.
-			}
-			return nil
-		}
+// Walks through the input directory and processes all video files by calling processFile on each file.
+// It returns an error if there is an error walking the input directory.
+func (tcs *TrailCamSorter) processFiles() {
+	const bufferSize = 100
 
-		// Check if the file should be ignored.
-		filename := filepath.Base(path)
-		if ignoreMap[filename] {
-			log.WithFields(log.Fields{
-				"type": "file",
-				"path": path,
-			}).Warn("Skipping ignored file")
-			return nil // Skip the file.
-		}
+	filesChan := make(chan string, bufferSize)
 
-		if !tcs.hasVideoFileExtension(path) {
-			return nil
-		}
+	var wg sync.WaitGroup
+	tcs.startWorkers(&wg, filesChan)
 
-		if tcs.Params.Limit > 0 && count >= tcs.Params.Limit {
-			return errLimitReached
-		}
-
-		filesChan <- path
-		count++
-
-		return nil
-	})
+	count, err := tcs.walkAndProcessFiles(filesChan)
 
 	if err != nil && !errors.Is(err, errLimitReached) {
 		log.WithError(err).Info("Error occurred")
 	}
 
-	// Close the files channel to signal the workers to exit.
 	close(filesChan)
-
-	// Wait for all workers to complete.
 	wg.Wait()
 
 	log.WithFields(log.Fields{
 		"count": count,
 	}).Info("Processed files")
+}
+
+// Creates and starts the specified number of worker goroutines
+// to process files concurrently. Each worker receives file paths from the
+// filesChan channel and processes them using the processFrame method.
+func (tcs *TrailCamSorter) startWorkers(wg *sync.WaitGroup, filesChan chan string) {
+	// Loop to create the specified number of worker goroutines.
+	for i := 0; i < tcs.Params.Workers; i++ {
+		// Increment the WaitGroup counter.
+		wg.Add(1)
+
+		// Launch a worker goroutine.
+		go func() {
+			// Decrement the WaitGroup counter when the goroutine finishes.
+			defer wg.Done()
+
+			// Process files sent to the filesChan channel.
+			for path := range filesChan {
+				// Process the file and log an error if it occurs.
+				if err := tcs.processFrame(path); err != nil {
+					log.WithFields(log.Fields{
+						"path":  path,
+						"error": err,
+					}).Error("Error processing file")
+				}
+			}
+		}()
+	}
+}
+
+// Walks the input directory, processes each file that
+// meets the criteria, and sends their paths to the filesChan channel.
+// It returns the total number of processed files and any error encountered.
+func (tcs *TrailCamSorter) walkAndProcessFiles(filesChan chan string) (int, error) {
+	var count int
+	err := filepath.Walk(tcs.Params.InputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return tcs.handleWalkError(path, err)
+		}
+
+		if info.IsDir() {
+			return tcs.handleWalkDirectory(path)
+		}
+
+		return tcs.handleWalkFile(path, filesChan, &count)
+	})
+	return count, err
+}
+
+// Handles errors encountered while walking the input directory.
+// It logs the error and skips the directory if there's a permission issue.
+func (tcs *TrailCamSorter) handleWalkError(path string, err error) error {
+	if os.IsPermission(err) {
+		log.WithFields(log.Fields{
+			"path":  path,
+			"error": err,
+		}).Warn("Skipping directory due to permission issue")
+		return filepath.SkipDir
+	}
+	log.WithFields(log.Fields{
+		"path":  path,
+		"error": err,
+	}).Error("Error accessing path")
+	return nil
+}
+
+// Checks if a directory should be ignored while
+// walking the input directory, and skips it if necessary.
+func (tcs *TrailCamSorter) handleWalkDirectory(path string) error {
+	dir := filepath.Base(path)
+	if tcs.IgnoreMap[dir] {
+		log.WithFields(log.Fields{
+			"type": "directory",
+			"path": path,
+		}).Warn("Skipping ignored directory")
+		return filepath.SkipDir
+	}
+	return nil
+}
+
+// Processes a file encountered while walking the input directory.
+// It checks if the file should be ignored, has a video file extension, and if the limit is reached.
+// If the file passes these checks, it is added to the filesChan channel and the count is incremented.
+func (tcs *TrailCamSorter) handleWalkFile(path string, filesChan chan string, count *int) error {
+	filename := filepath.Base(path)
+	if tcs.IgnoreMap[filename] {
+		log.WithFields(log.Fields{
+			"type": "file",
+			"path": path,
+		}).Warn("Skipping ignored file")
+		return nil
+	}
+
+	if !tcs.hasVideoFileExtension(path) {
+		return nil
+	}
+
+	if tcs.Params.Limit > 0 && *count >= tcs.Params.Limit {
+		return errLimitReached
+	}
+
+	filesChan <- path
+	*count++
+
+	return nil
 }
 
 // Creates an OpenCV Mat containing a blank image of the specified width and height,
