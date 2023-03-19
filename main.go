@@ -193,9 +193,7 @@ func (tcs *TrailCamSorter) processFiles() {
 	close(filesChan)
 	wg.Wait()
 
-	log.WithFields(log.Fields{
-		"count": count,
-	}).Info("Processed files")
+	log.WithFields(log.Fields{"count": count}).Info("Processed files")
 }
 
 // Creates and starts the specified number of worker goroutines
@@ -216,10 +214,7 @@ func (tcs *TrailCamSorter) startWorkers(wg *sync.WaitGroup, filesChan chan strin
 			for path := range filesChan {
 				// Process the file and log an error if it occurs.
 				if err := tcs.processFrame(path); err != nil {
-					log.WithFields(log.Fields{
-						"path":  path,
-						"error": err,
-					}).Error("Error processing file")
+					log.WithFields(log.Fields{"path": path, "error": err}).Error("Error processing file")
 				}
 			}
 		}()
@@ -249,16 +244,10 @@ func (tcs *TrailCamSorter) walkAndProcessFiles(filesChan chan string) (int, erro
 // It logs the error and skips the directory if there's a permission issue.
 func (tcs *TrailCamSorter) handleWalkError(path string, err error) error {
 	if os.IsPermission(err) {
-		log.WithFields(log.Fields{
-			"path":  path,
-			"error": err,
-		}).Warn("Skipping directory due to permission issue")
+		log.WithFields(log.Fields{"path": path, "error": err}).Warn("Skipping directory due to permission issue")
 		return filepath.SkipDir
 	}
-	log.WithFields(log.Fields{
-		"path":  path,
-		"error": err,
-	}).Error("Error accessing path")
+	log.WithFields(log.Fields{"path": path, "error": err}).Error("Error accessing path")
 	return nil
 }
 
@@ -267,10 +256,7 @@ func (tcs *TrailCamSorter) handleWalkError(path string, err error) error {
 func (tcs *TrailCamSorter) handleWalkDirectory(path string) error {
 	dir := filepath.Base(path)
 	if tcs.IgnoreMap[dir] {
-		log.WithFields(log.Fields{
-			"type": "directory",
-			"path": path,
-		}).Warn("Skipping ignored directory")
+		log.WithFields(log.Fields{"type": "directory", "path": path}).Warn("Skipping ignored directory")
 		return filepath.SkipDir
 	}
 	return nil
@@ -282,10 +268,7 @@ func (tcs *TrailCamSorter) handleWalkDirectory(path string) error {
 func (tcs *TrailCamSorter) handleWalkFile(path string, filesChan chan string, count *int) error {
 	filename := filepath.Base(path)
 	if tcs.IgnoreMap[filename] {
-		log.WithFields(log.Fields{
-			"type": "file",
-			"path": path,
-		}).Warn("Skipping ignored file")
+		log.WithFields(log.Fields{"type": "file", "path": path}).Warn("Skipping ignored file")
 		return nil
 	}
 
@@ -320,103 +303,22 @@ func (tcs *TrailCamSorter) createLabelImage(label string, width int, height int)
 	return blankImage
 }
 
-// Reads a frame from the video file, extracts the camera name,
-// time and date from the image, constructs an output path for the video file
-// based on this information, and moves the video file to the output path.
-// Returns an error if any of these steps fail.
+// Processes the input video file to extract relevant TrailCamData. It attempts to
+// read multiple frames and uses OCR to extract the data. If the extraction is successful, the
+// function constructs an output path based on the extracted data and renames the input file
+// accordingly. If the extraction fails for all attempted frames, an error is returned.
 func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 	var data TrailCamData
+	var err error
 
 	// Attempt to read the frame.
 	frameNumber := 0
 	for frameNumber <= 10 {
-		// Read a frame from the video file.
-		frame, err := tcs.readFrame(inputFile, frameNumber)
-		if frame == nil {
-			log.WithFields(log.Fields{
-				"error":        err,
-				"frame_number": frameNumber,
-			}).Error("Error frame is nil")
-			frameNumber++
-			continue
-		}
-
-		// Write frame to file for debugging.
-		err = tcs.debugImages(frame, fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame"))
+		data, err = tcs.processFrameWithNumber(inputFile, frameNumber)
 		if err != nil {
 			frameNumber++
 			continue
 		}
-
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error":        err,
-				"frame_number": frameNumber,
-			}).Error("Error reading frame")
-			frameNumber++
-			continue
-		}
-
-		// Close the frame when the function completes (either normally or with an error).
-		defer func() {
-			if err := frame.Close(); err != nil {
-				log.WithFields(log.Fields{
-					"error":        err,
-					"frame_number": frameNumber,
-				}).Error("Error closing frame")
-			}
-		}()
-
-		// Create bounding boxes scaled to the width and height of the frame.
-		boundingBoxes := tcs.getBoundingBoxes(frame)
-
-		// Create the joined image.
-		joined, err := tcs.createJoinedImage(inputFile, frameNumber, boundingBoxes, frame)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error": err,
-			}).Error("Error creating joined image")
-			frameNumber++
-			continue
-		}
-
-		// Perform OCR on the joined image.
-		text, err := tcs.performOCR(joined)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error":    err,
-				"ocr_text": text,
-			}).Error("Error performing OCR")
-			frameNumber++
-			continue
-		}
-
-		// Update the TrailCamData object with the extracted data.
-		data = tcs.parseOCRText(data, text)
-
-		// Validate the TrailCamData.
-		err = tcs.validateTrailCamData(data)
-		if err != nil {
-			log.WithFields(log.Fields{
-				"error":        err,
-				"frame_number": frameNumber,
-			}).Error("Error validating TrailCamData")
-
-			frameNumber++
-			continue
-		}
-
-		log.WithFields(log.Fields{
-			"trail_cam_data": fmt.Sprintf("%+v", data),
-			"frame_number":   frameNumber,
-		}).Debug("OCR: Extracted data")
-
-		// Close the joined file explicitly.
-		if err := joined.Close(); err != nil {
-			return err
-		}
-
-		// If OCR succeeds, break out of the retry loop.
 		break
 	}
 
@@ -429,6 +331,73 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 	}
 
 	return nil
+}
+
+// Reads a specific frame from the input video file and attempts to extract
+// TrailCamData from the frame using OCR. It returns the extracted TrailCamData and an error if
+// the extraction process fails for the given frameNumber. The function is designed to be used
+// in a loop with increasing frame numbers until successful extraction or a predetermined limit
+// is reached.
+func (tcs *TrailCamSorter) processFrameWithNumber(inputFile string, frameNumber int) (TrailCamData, error) {
+	var data TrailCamData
+
+	// Read a frame from the video file.
+	frame, err := tcs.readFrame(inputFile, frameNumber)
+	if frame == nil || err != nil {
+		log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error frame is nil")
+		return data, err
+	}
+
+	// Close the frame when the function completes (either normally or with an error).
+	defer func() {
+		if err := frame.Close(); err != nil {
+			log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error closing frame")
+		}
+	}()
+
+	// Write frame to file for debugging.
+	err = tcs.debugImages(frame, fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame"))
+	if err != nil {
+		return data, err
+	}
+
+	// Create bounding boxes scaled to the width and height of the frame.
+	boundingBoxes := tcs.getBoundingBoxes(frame)
+
+	// Create the joined image.
+	joined, err := tcs.createJoinedImage(inputFile, frameNumber, boundingBoxes, frame)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Error("Error creating joined image")
+		return data, err
+	}
+
+	// Close the joined file when the function completes (either normally or with an error).
+	defer func() {
+		if err := joined.Close(); err != nil {
+			log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error closing joined file")
+		}
+	}()
+
+	// Perform OCR on the joined image.
+	text, err := tcs.performOCR(joined)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "ocr_text": text}).Error("Error performing OCR")
+		return data, err
+	}
+
+	// Update the TrailCamData object with the extracted data.
+	data = tcs.parseOCRText(data, text)
+
+	// Validate the TrailCamData.
+	err = tcs.validateTrailCamData(data)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error validating TrailCamData")
+		return data, err
+	}
+
+	log.WithFields(log.Fields{"data": fmt.Sprintf("%+v", data), "frame_num": frameNumber}).Debug("OCR: Success")
+
+	return data, nil
 }
 
 // Checks if the file extension is one of the supported video file extensions.
