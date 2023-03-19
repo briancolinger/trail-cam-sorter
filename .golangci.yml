@@ -3,28 +3,52 @@ output:
 
 linters:
   enable:
+    - bodyclose # Check whether HTTP response bodies are closed
+    - decorder # Check declaration order and count of types, constants, variables and functions
     - errcheck # Detect unchecked errors
+    - goconst # Detect repeated values that can be made constants
+    # - gocyclo # or "cyclop" # Detect cyclomatic complexity
+    - godot # Check if comments end in a period
+    - goerr113 # Enforce standard error handling practices
+    - gofumpt # Or "gofmt" # Enforce standard formatting
+    - goimports # Ensure standard import formatting/ordering
+    - gomnd # Magic number detection
     - gosimple # Suggest code simplifications
     - govet # Reports suspicious constructs
     - ineffassign # Detects unused variable assignments
+    - misspell # Fix spelling errors
+    - nakedret # Detect naked returns
+    - revive # General purpose linter
     - staticcheck # go vet on steroids
     - typecheck # Standard Go type checks
-    - unused # Detect unused constants, variables, functions and types
-    - gocyclo # or "cyclop" # Detect cyclomatic complexity
-    - godot # Check if comments end in a period
-    - goconst # Detect repeated values that can be made constants
-    - gofumpt # Or "gofmt" # Enforce standard formatting
-    - goimports # Ensure standard import formatting/ordering
-    - misspell # Fix spelling errors
-    - revive # General purpose linter
     - unconvert # Detect unnecessary type conversions
     - unparam # Detect unused function parameters
-    - bodyclose # Check whether HTTP response bodies are closed
-    - goerr113 # Enforce standard error handling practices
-    - gomnd # Magic number detection
-    - nakedret # Detect naked returns
+    - unused # Detect unused constants, variables, functions and types
 
 linters-settings:
+  decorder:
+    # Required order of `type`, `const`, `var` and `func` declarations inside a file.
+    # Default: types before constants before variables before functions.
+    dec-order:
+      - type
+      - const
+      - var
+      - func
+    # If true, order of declarations is not checked at all.
+    # Default: true (disabled)
+    disable-dec-order-check: false
+    # If true, `init` func can be anywhere in file (does not have to be declared before all other functions).
+    # Default: true (disabled)
+    disable-init-func-first-check: false
+    # If true, multiple global `type`, `const` and `var` declarations are allowed.
+    # Default: true (disabled)
+    disable-dec-num-check: false
+
+  gocyclo:
+    # Minimal code complexity to report.
+    # Default: 30 (but we recommend 10-20)
+    min-complexity: 10
+
   godot:
     # Comments to be checked: `declarations`, `toplevel`, or `all`.
     # Default: declarations
