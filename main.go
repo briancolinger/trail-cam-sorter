@@ -45,7 +45,8 @@ type (
 		CameraName string    // The name of the camera that captured the observation.
 	}
 
-	// BoundingBox represents a rectangular region in an image, identified by a label string and a corresponding image.Rectangle.
+	// BoundingBox represents a rectangular region in an image, identified by a label string and
+	// a corresponding image.Rectangle.
 	BoundingBox struct {
 		Label string          // Label associated with this bounding box.
 		Rect  image.Rectangle // Rectangle specifying the region in the image.
@@ -161,7 +162,14 @@ func (tcs *TrailCamSorter) processFiles() {
 	}
 
 	// List of directory and file names to ignore.
-	ignoreNames := []string{"$RECYCLE.BIN", ".Spotlight-V100", "System Volume Information", ".fseventsd", ".Trashes", ".DS_Store"}
+	ignoreNames := []string{
+		"$RECYCLE.BIN",
+		".Spotlight-V100",
+		"System Volume Information",
+		".fseventsd",
+		".Trashes",
+		".DS_Store",
+	}
 	// Convert the list of ignore names to a map for efficient lookup.
 	ignoreMap := make(map[string]bool)
 	for _, name := range ignoreNames {
@@ -279,7 +287,7 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 		}
 
 		// Write frame to file for debugging.
-		err = tcs.debugImages(frame, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame")))
+		err = tcs.debugImages(frame, fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "frame"))
 		if err != nil {
 			frameNumber++
 			continue
@@ -379,7 +387,10 @@ func (tcs *TrailCamSorter) hasVideoFileExtension(path string) bool {
 	}
 
 	// Define the list of supported video file extensions.
-	supportedExtensions := []string{".avi", ".mp4", ".mov", ".wmv", ".mkv", ".flv", ".webm", ".m4v", ".mpeg", ".mpg", ".m2v", ".ts", ".mts", ".m2ts", ".vob", ".3gp"}
+	supportedExtensions := []string{
+		".avi", ".mp4", ".mov", ".wmv", ".mkv", ".flv", ".webm", ".m4v",
+		".mpeg", ".mpg", ".m2v", ".ts", ".mts", ".m2ts", ".vob", ".3gp",
+	}
 
 	// Extract the file extension from the path.
 	ext := strings.ToLower(filepath.Ext(path))
@@ -400,10 +411,20 @@ func (tcs *TrailCamSorter) hasVideoFileExtension(path string) bool {
 // Returns the constructed output path and an error, if any.
 func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) string {
 	// Define the format for the output path.
-	outputPathFormat := filepath.Join(tcs.Params.OutputDir, data.CameraName, data.Timestamp.Format("2006-01-02"), "%s-%s-%s.avi")
+	outputPathFormat := filepath.Join(
+		tcs.Params.OutputDir,
+		data.CameraName,
+		data.Timestamp.Format("2006-01-02"),
+		"%s-%s-%s.avi",
+	)
 
 	// Construct the output path using the camera name, date, time.
-	outputPath := fmt.Sprintf(outputPathFormat, data.CameraName, data.Timestamp.Format("2006-01-02"), data.Timestamp.Format("15-04-05PM"))
+	outputPath := fmt.Sprintf(
+		outputPathFormat,
+		data.CameraName,
+		data.Timestamp.Format("2006-01-02"),
+		data.Timestamp.Format("15-04-05PM"),
+	)
 
 	// Check if a file already exists at the output path.
 	i := 1
@@ -414,7 +435,12 @@ func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) string {
 		}
 
 		// If a file already exists, add a suffix and try again.
-		outputPath = fmt.Sprintf(outputPathFormat, data.CameraName, data.Timestamp.Format("2006-01-02"), data.Timestamp.Format("15-04-05PM")+fmt.Sprintf("-%d", i))
+		outputPath = fmt.Sprintf(
+			outputPathFormat,
+			data.CameraName,
+			data.Timestamp.Format("2006-01-02"),
+			data.Timestamp.Format("15-04-05PM")+fmt.Sprintf("-%d", i),
+		)
 		i++
 	}
 
@@ -539,11 +565,13 @@ func (tcs *TrailCamSorter) getBoundingBoxes(imgMat *gocv.Mat) []BoundingBox {
 // to hold the label and the cropped bounding box, overlays the cropped bounding box onto the label image,
 // concatenates the label image and the cropped bounding boxes, and writes the joined image to the specified filepath.
 // It returns an error if any of the image operations fail.
-func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, boundingBoxes []BoundingBox, frame *gocv.Mat) (*gocv.Mat, error) {
+func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, boundingBoxes []BoundingBox, frame *gocv.Mat) (*gocv.Mat, error) { // nolint
 	// Initialize the joined variable with an empty image of the correct size.
 	joined := gocv.NewMatWithSize(0, 0, gocv.MatTypeCV8UC3)
+
 	// Initialize the labelImage variable with an empty image of the correct size.
 	labelImage := gocv.NewMatWithSize(0, 0, gocv.MatTypeCV8UC3)
+
 	// Loop through each bounding box and crop out the image.
 	var croppedImages []gocv.Mat
 	for _, box := range boundingBoxes {
@@ -558,7 +586,6 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 		// Create a blank container image to hold the label and the cropped bounding box.
 		const labelImageWidth = 800
 		const labelImageHeight = 60
-
 		labelImage = tcs.createLabelImage(box.Label, labelImageWidth, labelImageHeight)
 		defer func() {
 			if err := labelImage.Close(); err != nil {
@@ -567,19 +594,26 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 		}()
 
 		// Overlay the cropped image onto the label image.
-		roi := labelImage.Region(image.Rectangle{Min: image.Point{0, 0}, Max: image.Point{labelImage.Cols(), labelImage.Rows()}})
+		roi := labelImage.Region(image.Rectangle{
+			Min: image.Point{0, 0},
+			Max: image.Point{labelImage.Cols(), labelImage.Rows()},
+		})
 		cropOrigin := image.Point{labelImage.Cols() - cropped.Cols(), 0}
-		croppedRoi := roi.Region(image.Rectangle{Min: cropOrigin, Max: cropOrigin.Add(image.Point{cropped.Cols(), cropped.Rows()})})
+		croppedRoi := roi.Region(image.Rectangle{
+			Min: cropOrigin,
+			Max: cropOrigin.Add(image.Point{cropped.Cols(), cropped.Rows()}),
+		})
 		cropped.CopyTo(&croppedRoi)
 
 		// Write cropped image to file for debugging.
-		err := tcs.debugImages(&cropped, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label)))
+		err := tcs.debugImages(&cropped, fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label))
 		if err != nil {
 			continue
 		}
 
-		// Write images to file for debugging.
-		err = tcs.debugImages(&labelImage, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label+"-label")))
+		// Write label images to file for debugging.
+		labelImageName := fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, box.Label+"-label")
+		err = tcs.debugImages(&labelImage, labelImageName)
 		if err != nil {
 			continue
 		}
@@ -603,7 +637,7 @@ func (tcs *TrailCamSorter) createJoinedImage(inputFile string, frameNumber int, 
 	}
 
 	// Write joined image to file for debugging.
-	err := tcs.debugImages(&joined, filepath.Join(filepath.Dir(inputFile), "debug", fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "joined")))
+	err := tcs.debugImages(&joined, fmt.Sprintf("%s-%d-%s.png", filepath.Base(inputFile), frameNumber, "joined"))
 	if err != nil {
 		return nil, err
 	}
@@ -796,18 +830,28 @@ func (tcs *TrailCamSorter) debugImages(imgMat *gocv.Mat, filename string) error 
 		return nil
 	}
 
-	// Get the directory path from the filename.
-	dir := filepath.Dir(filename)
+	// Get the path to the current working directory.
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 
+	// Create a path to the "debug" subdirectory within the current directory.
+	debugDir := filepath.Join(currentDir, "debug")
+
+	// Directory permissions.
 	const DirPerm = 0o755
 
 	// Create the directory if it doesn't exist.
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		err := os.MkdirAll(dir, DirPerm)
+	if _, err := os.Stat(debugDir); os.IsNotExist(err) {
+		err := os.MkdirAll(debugDir, DirPerm)
 		if err != nil {
 			return err
 		}
 	}
+
+	// Prepend debugDir to the filename.
+	filename = filepath.Join(debugDir, filename)
 
 	// Save the image to a file.
 	success := gocv.IMWrite(filename, *imgMat)

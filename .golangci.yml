@@ -16,6 +16,7 @@ linters:
     - gosimple # Suggest code simplifications
     - govet # Reports suspicious constructs
     - ineffassign # Detects unused variable assignments
+    - lll # Reports long lines
     - misspell # Fix spelling errors
     - nakedret # Detect naked returns
     - revive # General purpose linter
@@ -65,6 +66,15 @@ linters-settings:
     # Check that each sentence starts with a capital letter.
     # Default: false
     capital: true
+
+  lll:
+    # Max line length, lines longer will be reported.
+    # '\t' is counted as 1 character by default, and can be changed with the tab-width option.
+    # Default: 120.
+    line-length: 120
+    # Tab width in spaces.
+    # Default: 1
+    tab-width: 1
 
 issues:
   exclude-use-default: false
