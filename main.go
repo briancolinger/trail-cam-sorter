@@ -36,17 +36,17 @@ var (
 
 // TrailCamSorter is a struct that represents a trail camera video file sorter.
 type TrailCamSorter struct {
-	Params SorterParams // holds the command line flags
+	Params SorterParams // Holds the command line flags.
 }
 
 // SorterParams contains parameters for the TrailCamSorter.
 type SorterParams struct {
-	InputDir  string // the input directory containing video files
-	OutputDir string // the output directory for sorted video files
-	DryRun    bool   // if true, the files will not be moved
-	Debug     bool   // enables debug mode
-	Limit     int    // limits the number of files processed
-	Workers   int    // the number of workers used to process files
+	InputDir  string // The input directory containing video files.
+	OutputDir string // The output directory for sorted video files.
+	DryRun    bool   // If true, the files will not be moved.
+	Debug     bool   // Enables debug mode.
+	Limit     int    // Limits the number of files processed.
+	Workers   int    // The number of workers used to process files.
 }
 
 // TrailCamData a struct that contains the extracted data from a Trail Cam image.
@@ -68,16 +68,16 @@ type BoundingBox struct {
 // Removes empty directories.
 // Prints a message when done.
 func main() {
-	// Start the timer
+	// Start the timer.
 	start := time.Now()
 
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.InfoLevel)
 
-	// Create a new TrailCamSorter instance
+	// Create a new TrailCamSorter instance.
 	tcs := &TrailCamSorter{}
 
-	// Parse the command line arguments
+	// Parse the command line arguments.
 	err := tcs.parseFlags()
 	if err != nil {
 		log.WithFields(log.Fields{
@@ -90,10 +90,10 @@ func main() {
 		log.SetLevel(log.DebugLevel)
 	}
 
-	// Process the files
+	// Process the files.
 	tcs.processFiles()
 
-	// Remove all empty directories in InputDir
+	// Remove all empty directories in InputDir.
 	if err := tcs.removeEmptyDirs(); err != nil {
 		log.WithFields(log.Fields{
 			"error": err,
@@ -108,7 +108,7 @@ func main() {
 // Parses the command line flags and stores the results in the TrailCamSorter instance.
 // Returns an error if required flags are not set.
 func (tcs *TrailCamSorter) parseFlags() error {
-	// Set command line flags
+	// Set command line flags.
 	flag.StringVar(&tcs.Params.InputDir, "input", "", "the input directory containing video files")
 	flag.StringVar(&tcs.Params.OutputDir, "output", "", "the output directory for sorted video files")
 	flag.BoolVar(&tcs.Params.DryRun, "dry-run", true, "if true, the files will not be moved")
@@ -116,7 +116,7 @@ func (tcs *TrailCamSorter) parseFlags() error {
 	flag.IntVar(&tcs.Params.Limit, "limit", math.MaxInt32, "limits the number of files processed")
 	flag.IntVar(&tcs.Params.Workers, "workers", 0, "the number of workers used to process files")
 
-	// Parse the command line flags
+	// Parse the command line flags.
 	flag.Parse()
 
 	// Check that the required input directory flag is set.
@@ -136,13 +136,13 @@ func (tcs *TrailCamSorter) parseFlags() error {
 func (tcs *TrailCamSorter) processFiles() {
 	const bufferSize = 100
 
-	// Create a buffered channel to receive file paths
+	// Create a buffered channel to receive file paths.
 	filesChan := make(chan string, bufferSize)
 
-	// Use a WaitGroup to wait for all goroutines to complete
+	// Use a WaitGroup to wait for all goroutines to complete.
 	var wg sync.WaitGroup
 
-	// Start the workers
+	// Start the workers.
 	for i := 0; i < tcs.Params.Workers; i++ {
 		wg.Add(1)
 		go func() {
@@ -166,7 +166,7 @@ func (tcs *TrailCamSorter) processFiles() {
 		ignoreMap[name] = true
 	}
 
-	// Walk through the input directory and send each file path to the channel
+	// Walk through the input directory and send each file path to the channel.
 	var count int
 	err := filepath.Walk(tcs.Params.InputDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -194,7 +194,7 @@ func (tcs *TrailCamSorter) processFiles() {
 					"type": "directory",
 					"path": path,
 				}).Warn("Skipping ignored directory")
-				return filepath.SkipDir // Skip the directory
+				return filepath.SkipDir // Skip the directory.
 			}
 			return nil
 		}
@@ -206,7 +206,7 @@ func (tcs *TrailCamSorter) processFiles() {
 				"type": "file",
 				"path": path,
 			}).Warn("Skipping ignored file")
-			return nil // Skip the file
+			return nil // Skip the file.
 		}
 
 		if !tcs.hasVideoFileExtension(path) {
@@ -227,10 +227,10 @@ func (tcs *TrailCamSorter) processFiles() {
 		log.WithError(err).Info("Error occurred")
 	}
 
-	// Close the files channel to signal the workers to exit
+	// Close the files channel to signal the workers to exit.
 	close(filesChan)
 
-	// Wait for all workers to complete
+	// Wait for all workers to complete.
 	wg.Wait()
 
 	log.WithFields(log.Fields{
@@ -367,22 +367,22 @@ func (tcs *TrailCamSorter) processFrame(inputFile string) error {
 }
 
 // Checks if the file extension is one of the supported video file extensions.
-// path is the file path to be checked.
-// returns true if the file has a supported video file extension, false otherwise.
+// The path variable is the file path to be checked.
+// Returns true if the file has a supported video file extension, false otherwise.
 func (tcs *TrailCamSorter) hasVideoFileExtension(path string) bool {
-	// Ignored filenames like: ._01.avi
+	// Ignored filenames like: ._01.avi.
 	matchedInvalidAvi := regexp.MustCompile(`^\._.+\.avi$`).MatchString(filepath.Base(path))
 	if matchedInvalidAvi {
 		return false
 	}
 
-	// Define the list of supported video file extensions
+	// Define the list of supported video file extensions.
 	supportedExtensions := []string{".avi", ".mp4", ".mov", ".wmv", ".mkv", ".flv", ".webm", ".m4v", ".mpeg", ".mpg", ".m2v", ".ts", ".mts", ".m2ts", ".vob", ".3gp"}
 
-	// Extract the file extension from the path
+	// Extract the file extension from the path.
 	ext := strings.ToLower(filepath.Ext(path))
 
-	// Check if the file extension is in the list of supported video file extensions
+	// Check if the file extension is in the list of supported video file extensions.
 	for _, supportedExt := range supportedExtensions {
 		if ext == supportedExt {
 			return true
@@ -397,13 +397,13 @@ func (tcs *TrailCamSorter) hasVideoFileExtension(path string) bool {
 // If a file already exists at the output path, a suffix is added to the file name.
 // Returns the constructed output path and an error, if any.
 func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) string {
-	// Define the format for the output path
+	// Define the format for the output path.
 	outputPathFormat := filepath.Join(tcs.Params.OutputDir, data.CameraName, data.Timestamp.Format("2006-01-02"), "%s-%s-%s.avi")
 
-	// Construct the output path using the camera name, date, time
+	// Construct the output path using the camera name, date, time.
 	outputPath := fmt.Sprintf(outputPathFormat, data.CameraName, data.Timestamp.Format("2006-01-02"), data.Timestamp.Format("15-04-05PM"))
 
-	// Check if a file already exists at the output path
+	// Check if a file already exists at the output path.
 	i := 1
 	for {
 		_, err := os.Stat(outputPath)
@@ -411,12 +411,12 @@ func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) string {
 			break
 		}
 
-		// If a file already exists, add a suffix and try again
+		// If a file already exists, add a suffix and try again.
 		outputPath = fmt.Sprintf(outputPathFormat, data.CameraName, data.Timestamp.Format("2006-01-02"), data.Timestamp.Format("15-04-05PM")+fmt.Sprintf("-%d", i))
 		i++
 	}
 
-	// Return the constructed output path
+	// Return the constructed output path.
 	return outputPath
 }
 
@@ -424,7 +424,7 @@ func (tcs *TrailCamSorter) constructOutputPath(data TrailCamData) string {
 // If DryRun is true, it logs the operation without actually renaming the file.
 // It creates the destination directory if it doesn't exist, and returns an error if any of the operations fail.
 func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
-	// Return early if DryRun is true
+	// Return early if DryRun is true.
 	if tcs.Params.DryRun {
 		log.WithFields(log.Fields{
 			"type": "DRY RUN",
@@ -434,7 +434,7 @@ func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 		return nil
 	}
 
-	// Create the destination directory
+	// Create the destination directory.
 	err := os.MkdirAll(filepath.Dir(dest), os.ModePerm)
 	if err != nil {
 		return err
@@ -446,7 +446,7 @@ func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 		"dest": dest,
 	}).Info("Renaming file")
 
-	// Rename the file
+	// Rename the file.
 	err = os.Rename(src, dest)
 	if err != nil {
 		return err
@@ -457,7 +457,7 @@ func (tcs *TrailCamSorter) renameFile(src string, dest string) error {
 
 // Reads a frame from a video file at the specified frame number and returns the frame data as a Mat object.
 func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.Mat, error) {
-	// Open the video file
+	// Open the video file.
 	cap, err := gocv.VideoCaptureFile(inputFile)
 	if err != nil {
 		return nil, err
@@ -468,22 +468,22 @@ func (tcs *TrailCamSorter) readFrame(inputFile string, frameNumber int) (*gocv.M
 		}
 	}()
 
-	// Get the total number of frames in the video
+	// Get the total number of frames in the video.
 	numFrames := cap.Get(gocv.VideoCaptureFrameCount)
 
-	// If frameNumber is greater than 0, set it as a percentage of numFrames
+	// If frameNumber is greater than 0, set it as a percentage of numFrames.
 	const frameNumberPercent = 0.1
 	if frameNumber > 0 {
 		frameNumber = int(float64(frameNumber) * numFrames / frameNumberPercent)
 	}
 
-	// Ensure that frameNumber does not exceed the total number of frames in the video
+	// Ensure that frameNumber does not exceed the total number of frames in the video.
 	frameNumber = int(math.Min(float64(frameNumber), numFrames))
 
-	// Move the video to the desired frame number
+	// Move the video to the desired frame number.
 	cap.Set(gocv.VideoCapturePosFrames, float64(frameNumber))
 
-	// Read the frame from the video
+	// Read the frame from the video.
 	frame := gocv.NewMat()
 	if ok := cap.Read(&frame); !ok {
 		return nil, fmt.Errorf("%w", errFailedToReadFrame)
@@ -741,13 +741,13 @@ func (tcs *TrailCamSorter) updateTrailCamData(data TrailCamData, label string, t
 
 // Removes all empty directories that are subdirectories of the input directory.
 func (tcs *TrailCamSorter) removeEmptyDirs() error {
-	// Return early if DryRun is true
+	// Return early if DryRun is true.
 	if tcs.Params.DryRun {
 		log.WithField("type", "DRY RUN").Info("Skip removing empty directories")
 		return nil
 	}
 
-	// Walk through the input directory and process each file
+	// Walk through the input directory and process each file.
 	err := filepath.Walk(tcs.Params.InputDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			log.WithFields(log.Fields{
@@ -782,7 +782,7 @@ func (tcs *TrailCamSorter) removeEmptyDirs() error {
 	})
 	if err != nil {
 		log.WithField("error", err).Error("Error removing empty directories")
-		return err // Return the error value
+		return err // Return the error value.
 	}
 
 	return nil

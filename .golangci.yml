@@ -1,0 +1,46 @@
+output:
+  format: colored-line-number
+
+linters:
+  enable:
+    - errcheck # Detect unchecked errors
+    - gosimple # Suggest code simplifications
+    - govet # Reports suspicious constructs
+    - ineffassign # Detects unused variable assignments
+    - staticcheck # go vet on steroids
+    - typecheck # Standard Go type checks
+    - unused # Detect unused constants, variables, functions and types
+    - gocyclo # or "cyclop" # Detect cyclomatic complexity
+    - godot # Check if comments end in a period
+    - goconst # Detect repeated values that can be made constants
+    - gofumpt # Or "gofmt" # Enforce standard formatting
+    - goimports # Ensure standard import formatting/ordering
+    - misspell # Fix spelling errors
+    - revive # General purpose linter
+    - unconvert # Detect unnecessary type conversions
+    - unparam # Detect unused function parameters
+    - bodyclose # Check whether HTTP response bodies are closed
+    - goerr113 # Enforce standard error handling practices
+    - gomnd # Magic number detection
+    - nakedret # Detect naked returns
+
+linters-settings:
+  godot:
+    # Comments to be checked: `declarations`, `toplevel`, or `all`.
+    # Default: declarations
+    scope: all
+    # List of regexps for excluding particular comment lines from check.
+    # Default: []
+    exclude:
+      # Exclude todo and fixme comments.
+      - '^fixme:'
+      - '^todo:'
+    # Check that each sentence ends with a period.
+    # Default: true
+    period: true
+    # Check that each sentence starts with a capital letter.
+    # Default: false
+    capital: true
+
+issues:
+  exclude-use-default: false
