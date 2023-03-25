@@ -1,7 +1,6 @@
-// Package TrailCamSorter provides functionality to sort and process trail camera footage.
-// The TrailCamSorter struct provides methods to read, sort, and process trail camera data
-// for further analysis or storage. This package also includes utility functions for handling
-// common tasks such as file I/O and timestamp manipulation.
+// Package main provides functionality to process and sort trail camera footage.
+// The main function reads, processes, and sorts trail camera data for further analysis or storage.
+// This package also includes utility functions for handling common tasks such as file I/O and timestamp manipulation.
 package main
 
 import (
@@ -24,13 +23,13 @@ import (
 )
 
 type (
-	// A struct that represents a trail camera video file sorter.
+	// A sorter struct represents a video file sorter.
 	sorter struct {
 		params    sorterParams    // Holds the command line flags.
 		ignoreMap map[string]bool // Holds the list of files and directories to ignore.
 	}
 
-	// Contains parameters for the sorter.
+	// A sorterParams struct contains parameters for the sorter.
 	sorterParams struct {
 		InputDir  string // The input directory containing video files.
 		OutputDir string // The output directory for sorted video files.
@@ -40,13 +39,13 @@ type (
 		Workers   int    // The number of workers used to process files.
 	}
 
-	// A struct that contains the extracted data from a Trail Cam image.
+	// A trailCamData struct represents the extracted data from an image.
 	trailCamData struct {
 		Timestamp  time.Time // The timestamp of the observation (including both time and date).
 		CameraName string    // The name of the camera that captured the observation.
 	}
 
-	// A bBox represents a region in an image, identified by a label string and a corresponding image.Rectangle.
+	// A bBox struct represents a region in an image, identified by a label string and a corresponding image.Rectangle.
 	bBox struct {
 		Label string          // Label associated with this bounding box.
 		Rect  image.Rectangle // Rectangle specifying the region in the image.
@@ -60,20 +59,18 @@ var (
 	errFailedToReadFrame    = errors.New("failed to read frame from video")
 	errLabeledImageIsEmpty  = errors.New("labeled image is empty")
 	errOCRReturnedEmptyText = errors.New("OCR returned empty text")
-	errInvalidTrailCamData  = errors.New("invalid TrailCamData")
+	errInvalidTrailCamData  = errors.New("invalid trailCamData")
 	errImageWrite           = errors.New("failed to write image to file")
 )
 
-// Entry point of the program.
-// Creates a new instance.
-// Parses the command line arguments.
-// Processes the files.
-// Removes empty directories.
-// Prints a message when done.
+// main is the entry point of the program.
+// It creates a new instance of sorter, parses the command line arguments, processes the files,
+// removes empty directories, and prints a message when done.
 func main() {
 	// Start the timer.
 	start := time.Now()
 
+	// Configure logging.
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.InfoLevel)
 
@@ -86,7 +83,7 @@ func main() {
 	// Create a new sorter instance.
 	s := newSorter(params)
 
-	// Change logging level if debugging.
+	// Set logging level to debug if debugging is enabled.
 	if s.params.Debug {
 		log.SetLevel(log.DebugLevel)
 	}
@@ -99,12 +96,12 @@ func main() {
 		log.WithFields(log.Fields{"error": err}).Error("Error removing empty directories")
 	}
 
+	// Print a message when done.
 	log.WithFields(log.Fields{"time_taken": time.Since(start)}).Info("Done.")
 }
 
-// newSorter initializes a new sorter with the provided
-// sorterParams and the default IgnoreMap.
-// It returns a pointer to the newly created sorter.
+// newSorter initializes and returns a new sorter with the provided sorterParams
+// and the default IgnoreMap.
 func newSorter(params sorterParams) *sorter {
 	return &sorter{
 		params:    params,         // Set the provided sorterParams to the new instance.
@@ -112,18 +109,18 @@ func newSorter(params sorterParams) *sorter {
 	}
 }
 
-// Parses the command line flags and stores the results in the sorter instance.
+// parseFlags parses the command line flags and stores the results in a sorterParams instance.
 // Returns an error if required flags are not set.
 func parseFlags() (sorterParams, error) {
 	var params sorterParams
 
-	// Set command line flags.
-	flag.StringVar(&params.InputDir, "input", "", "the input directory containing video files")
-	flag.StringVar(&params.OutputDir, "output", "", "the output directory for sorted video files")
-	flag.BoolVar(&params.DryRun, "dry-run", true, "if true, the files will not be moved")
-	flag.BoolVar(&params.Debug, "debug", false, "if true, enables debug mode")
-	flag.IntVar(&params.Limit, "limit", math.MaxInt32, "limits the number of files processed")
-	flag.IntVar(&params.Workers, "workers", 0, "the number of workers used to process files")
+	// Define command line flags.
+	flag.StringVar(&params.InputDir, "input", "", "The input directory containing video files.")
+	flag.StringVar(&params.OutputDir, "output", "", "The output directory for sorted video files.")
+	flag.BoolVar(&params.DryRun, "dry-run", true, "If true, the files will not be moved.")
+	flag.BoolVar(&params.Debug, "debug", false, "If true, enables debug mode.")
+	flag.IntVar(&params.Limit, "limit", math.MaxInt32, "Limits the number of files processed.")
+	flag.IntVar(&params.Workers, "workers", 0, "The number of workers used to process files.")
 
 	// Parse the command line flags.
 	flag.Parse()
@@ -132,6 +129,7 @@ func parseFlags() (sorterParams, error) {
 	if params.InputDir == "" {
 		return params, fmt.Errorf("%w", errMissingInputDir)
 	}
+
 	// Check that the required output directory flag is set.
 	if params.OutputDir == "" {
 		return params, fmt.Errorf("%w", errMissingOutputDir)
@@ -140,10 +138,9 @@ func parseFlags() (sorterParams, error) {
 	return params, nil
 }
 
-// Generates a map containing the names of directories
-// and files that should be ignored while processing files. The keys of
-// the map are the names to be ignored, and the values are all set to
-// true for efficient lookups.
+// getIgnoreMap generates a map containing the names of directories
+// and files that should be ignored while processing files. The keys of the map
+// are the names to be ignored, and the values are all set to true for efficient lookups.
 func getIgnoreMap() map[string]bool {
 	// List of directory and file names to ignore.
 	ignoreNames := []string{
@@ -167,7 +164,7 @@ func getIgnoreMap() map[string]bool {
 	return ignoreMap
 }
 
-// Walks through the input directory and processes all video files by calling processFile on each file.
+// processFiles walks through the input directory and processes all video files by calling processFile on each file.
 // It returns an error if there is an error walking the input directory.
 func (s *sorter) processFiles() {
 	const bufferSize = 100
@@ -189,9 +186,9 @@ func (s *sorter) processFiles() {
 	log.WithFields(log.Fields{"count": count}).Info("Processed files")
 }
 
-// Creates and starts the specified number of worker goroutines
-// to process files concurrently. Each worker receives file paths from the
-// filesChan channel and processes them using the processFrame method.
+// startWorkers creates and starts the specified number of worker goroutines
+// to process files concurrently. Each worker receives file paths from the filesChan
+// channel and processes them using the processFrame method.
 func (s *sorter) startWorkers(wg *sync.WaitGroup, filesChan chan string) {
 	// Loop to create the specified number of worker goroutines.
 	for i := 0; i < s.params.Workers; i++ {
@@ -214,7 +211,7 @@ func (s *sorter) startWorkers(wg *sync.WaitGroup, filesChan chan string) {
 	}
 }
 
-// Walks the input directory, processes each file that
+// walkAndProcessFiles walks the input directory, processes each file that
 // meets the criteria, and sends their paths to the filesChan channel.
 // It returns the total number of processed files and any error encountered.
 func (s *sorter) walkAndProcessFiles(filesChan chan string) (int, error) {
@@ -233,7 +230,7 @@ func (s *sorter) walkAndProcessFiles(filesChan chan string) (int, error) {
 	return count, err
 }
 
-// Handles errors encountered while walking the input directory.
+// handleWalkError handles errors encountered while walking the input directory.
 // It logs the error and skips the directory if there's a permission issue.
 func (s *sorter) handleWalkError(path string, err error) error {
 	if os.IsPermission(err) {
@@ -244,7 +241,7 @@ func (s *sorter) handleWalkError(path string, err error) error {
 	return nil
 }
 
-// Checks if a directory should be ignored while
+// handleWalkDirectory checks if a directory should be ignored while
 // walking the input directory, and skips it if necessary.
 func (s *sorter) handleWalkDirectory(path string) error {
 	dir := filepath.Base(path)
@@ -255,7 +252,7 @@ func (s *sorter) handleWalkDirectory(path string) error {
 	return nil
 }
 
-// Processes a file encountered while walking the input directory.
+// handleWalkFile processes a file encountered while walking the input directory.
 // It checks if the file should be ignored, has a video file extension, and if the limit is reached.
 // If the file passes these checks, it is added to the filesChan channel and the count is incremented.
 func (s *sorter) handleWalkFile(path string, filesChan chan string, count *int) error {
@@ -279,7 +276,7 @@ func (s *sorter) handleWalkFile(path string, filesChan chan string, count *int) 
 	return nil
 }
 
-// Processes the input video file to extract relevant TrailCamData. It attempts to
+// processFrame processes the input video file to extract relevant trailCamData. It attempts to
 // read multiple frames and uses OCR to extract the data. If the extraction is successful, the
 // function constructs an output path based on the extracted data and renames the input file
 // accordingly. If the extraction fails for all attempted frames, an error is returned.
@@ -309,8 +306,8 @@ func (s *sorter) processFrame(inputFile string) error {
 	return nil
 }
 
-// Reads a specific frame from the input video file and attempts to extract
-// TrailCamData from the frame using OCR. It returns the extracted TrailCamData and an error if
+// processFrameWithNumber reads a specific frame from the input video file and attempts to extract
+// data from the frame using OCR. It returns the extracted data and an error if
 // the extraction process fails for the given frameNumber. The function is designed to be used
 // in a loop with increasing frame numbers until successful extraction or a predetermined limit
 // is reached.
@@ -320,14 +317,14 @@ func (s *sorter) processFrameWithNumber(inputFile string, frameNumber int) (trai
 	// Read a frame from the video file.
 	frame, err := s.readFrame(inputFile, frameNumber)
 	if frame == nil || err != nil {
-		log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error frame is nil")
+		log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error: frame is nil")
 		return data, err
 	}
 
 	// Close the frame when the function completes (either normally or with an error).
 	defer func() {
 		if err := frame.Close(); err != nil {
-			log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error closing frame")
+			log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error: closing frame")
 		}
 	}()
 
@@ -343,31 +340,31 @@ func (s *sorter) processFrameWithNumber(inputFile string, frameNumber int) (trai
 	// Create the labeled image.
 	labeled, err := s.createLabeledImage(inputFile, frameNumber, boundingBoxes, frame)
 	if err != nil {
-		log.WithFields(log.Fields{"error": err}).Error("Error creating labeled image")
+		log.WithFields(log.Fields{"error": err}).Error("Error: creating labeled image")
 		return data, err
 	}
 
 	// Close the labeled file when the function completes (either normally or with an error).
 	defer func() {
 		if err := labeled.Close(); err != nil {
-			log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error closing labeled file")
+			log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error: closing labeled file")
 		}
 	}()
 
 	// Perform OCR on the labeled image.
 	text, err := s.performOCR(labeled)
 	if err != nil {
-		log.WithFields(log.Fields{"error": err, "ocr_text": text}).Error("Error performing OCR")
+		log.WithFields(log.Fields{"error": err, "ocr_text": text}).Error("Error: performing OCR")
 		return data, err
 	}
 
 	// Update the trailCamData object with the extracted data.
 	data = s.parseOCRText(data, text)
 
-	// Validate the TrailCamData.
+	// Validate the trailCamData.
 	err = s.validateTrailCamData(data)
 	if err != nil {
-		log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error validating TrailCamData")
+		log.WithFields(log.Fields{"error": err, "frame_num": frameNumber}).Error("Error: validating trailCamData")
 		return data, err
 	}
 
@@ -376,11 +373,11 @@ func (s *sorter) processFrameWithNumber(inputFile string, frameNumber int) (trai
 	return data, nil
 }
 
-// Checks if the file extension is one of the supported video file extensions.
-// The path variable is the file path to be checked.
-// Returns true if the file has a supported video file extension, false otherwise.
+// hasVideoFileExtension checks if the file extension is one of the supported video file extensions.
+// The path parameter is the file path to be checked.
+// It returns true if the file has a supported video file extension, false otherwise.
 func (s *sorter) hasVideoFileExtension(path string) bool {
-	// Ignored filenames like: ._01.avi.
+	// Ignore filenames like: ._01.avi.
 	matchedInvalidAvi := regexp.MustCompile(`^\._.+\.avi$`).MatchString(filepath.Base(path))
 	if matchedInvalidAvi {
 		return false
@@ -405,10 +402,10 @@ func (s *sorter) hasVideoFileExtension(path string) bool {
 	return false
 }
 
-// Constructs an output path for the video file based on the extracted info.
-// The output path has the format: OutputDir/CameraName/Date/CameraName-Date-Time.avi
+// constructOutputPath constructs an output path for the video file based on the extracted info.
+// The output path has the format: OutputDir/CameraName/Date/CameraName-Date-Time.avi.
 // If a file already exists at the output path, a suffix is added to the file name.
-// Returns the constructed output path and an error, if any.
+// It returns the constructed output path.
 func (s *sorter) constructOutputPath(data trailCamData) string {
 	// Define the format for the output path.
 	outputPathFormat := filepath.Join(
@@ -418,7 +415,7 @@ func (s *sorter) constructOutputPath(data trailCamData) string {
 		"%s-%s-%s.avi",
 	)
 
-	// Construct the output path using the camera name, date, time.
+	// Construct the output path using the camera name, date, and time.
 	outputPath := fmt.Sprintf(
 		outputPathFormat,
 		data.CameraName,
@@ -448,13 +445,13 @@ func (s *sorter) constructOutputPath(data trailCamData) string {
 	return outputPath
 }
 
-// This function renames a file from the source path to the destination path.
+// renameFile renames a file from the source path to the destination path.
 // If DryRun is true, it logs the operation without actually renaming the file.
 // It creates the destination directory if it doesn't exist, and returns an error if any of the operations fail.
 func (s *sorter) renameFile(src string, dest string) error {
 	// Return early if DryRun is true.
 	if s.params.DryRun {
-		log.WithFields(log.Fields{"type": "DRY RUN", "src": src, "dest": dest}).Info("Skip renaming file")
+		log.WithFields(log.Fields{"type": "DRY RUN", "src": src, "dest": dest}).Info("Skipping file rename")
 		return nil
 	}
 
@@ -464,6 +461,7 @@ func (s *sorter) renameFile(src string, dest string) error {
 		return err
 	}
 
+	// Log the file rename operation.
 	log.WithFields(log.Fields{"type": "RENAME", "src": src, "dest": dest}).Info("Renaming file")
 
 	// Rename the file.
@@ -475,7 +473,7 @@ func (s *sorter) renameFile(src string, dest string) error {
 	return nil
 }
 
-// Reads a frame from a video file at the specified frame number and returns the frame data as a Mat object.
+// readFrame reads a frame from a video file at the specified frame number and returns the frame data as a Mat object.
 func (s *sorter) readFrame(inputFile string, frameNumber int) (*gocv.Mat, error) {
 	// Open the video file.
 	cap, err := gocv.VideoCaptureFile(inputFile)
@@ -512,7 +510,7 @@ func (s *sorter) readFrame(inputFile string, frameNumber int) (*gocv.Mat, error)
 	return &frame, nil
 }
 
-// Calculates the pixel coordinates for each label defined in labelCoordinates
+// getBoundingBoxes calculates the pixel coordinates for each label defined in labelCoordinates
 // and returns a slice of bounding boxes. The bounding boxes are defined by their top-left
 // and bottom-right coordinates, relative to the input image dimensions provided as arguments.
 func (s *sorter) getBoundingBoxes(imgMat *gocv.Mat) []bBox {
@@ -552,10 +550,11 @@ func (s *sorter) getBoundingBoxes(imgMat *gocv.Mat) []bBox {
 	return boundingBoxes
 }
 
-// Creates an OpenCV Mat containing a blank image of the specified width and height,
+// createLabelTemplate creates an OpenCV Mat containing a blank image of the specified width and height,
 // and adds the specified label to the image.
 // The function returns the resulting image as an OpenCV Mat.
 func (s *sorter) createLabelTemplate(label string, width int, height int) gocv.Mat {
+	// Create a blank image of the specified width and height.
 	blankImage := gocv.NewMatWithSizeFromScalar(gocv.NewScalar(0, 0, 0, 0), height, width, gocv.MatTypeCV8UC3)
 
 	// Add the box label to the blank image.
@@ -569,7 +568,7 @@ func (s *sorter) createLabelTemplate(label string, width int, height int) gocv.M
 	return blankImage
 }
 
-// This function takes a video frame, a slice of bounding boxes, and a filepath, and returns a
+// createLabeledImage takes a video frame, a slice of bounding boxes, and a filepath, and returns a
 // concatenated image of the cropped bounding boxes and their labels. It first creates a container image
 // to hold the label and the cropped bounding box, overlays the cropped bounding box onto the label image,
 // concatenates the label image and the cropped bounding boxes, and writes the labeled image to the specified filepath.
@@ -641,8 +640,8 @@ func (s *sorter) createLabeledImage(inputFile string, frameNum int, bBoxes []bBo
 	return &labeled, nil
 }
 
-// Performs OCR on a gocv.Mat object using Tesseract.
-// Returns the recognized text and any errors that occurred during the OCR process.
+// performOCR performs Optical Character Recognition (OCR) on an input gocv.Mat object using Tesseract.
+// It returns the recognized text and any error that occurred during the OCR process.
 func (s *sorter) performOCR(imgMat *gocv.Mat) (string, error) {
 	// Create a new Tesseract client.
 	client := gosseract.NewClient()
@@ -700,7 +699,7 @@ func (s *sorter) performOCR(imgMat *gocv.Mat) (string, error) {
 	return text, nil
 }
 
-// Parse OCR text and update TrailCamData object.
+// parseOCRText parses the OCR text and updates a trailCamData object.
 func (s *sorter) parseOCRText(data trailCamData, ocrText string) trailCamData {
 	const partsLength = 2
 
@@ -716,9 +715,9 @@ func (s *sorter) parseOCRText(data trailCamData, ocrText string) trailCamData {
 	return data
 }
 
-// Takes in a TrailCamData object and checks if its Timestamp field is not equal to zero,
-// and its CameraName field is not an empty string.
-// If either of these fields fails the validation, an error is returned.
+// validateTrailCamData takes a trailCamData object and checks if its Timestamp field is not equal to zero,
+// and its CameraName field is not an empty string. If either of these fields fails the validation,
+// an error is returned.
 func (s *sorter) validateTrailCamData(data trailCamData) error {
 	var errs []string
 
@@ -739,7 +738,7 @@ func (s *sorter) validateTrailCamData(data trailCamData) error {
 	return nil
 }
 
-// Updates a TrailCamData object with OCR results for a label.
+// updateTrailCamData updates a trailCamData object with OCR results for a label.
 func (s *sorter) updateTrailCamData(data trailCamData, label string, text string) trailCamData {
 	switch label {
 	case "Timestamp":
@@ -764,11 +763,11 @@ func (s *sorter) updateTrailCamData(data trailCamData, label string, text string
 	return data
 }
 
-// Removes all empty directories that are subdirectories of the input directory.
+// removeEmptyDirs removes all empty directories that are subdirectories of the input directory.
 func (s *sorter) removeEmptyDirs() error {
 	// Return early if DryRun is true.
 	if s.params.DryRun {
-		log.WithField("type", "DRY RUN").Info("Skip removing empty directories")
+		log.WithField("type", "DRY RUN").Info("Skipping removal of empty directories")
 		return nil
 	}
 
@@ -810,7 +809,7 @@ func (s *sorter) removeEmptyDirs() error {
 	return nil
 }
 
-// Write image to file for debugging.
+// debugImages writes an image to file for manual inspection.
 func (s *sorter) debugImages(imgMat *gocv.Mat, filename string) error {
 	if !s.params.Debug {
 		return nil
