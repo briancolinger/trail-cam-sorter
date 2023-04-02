@@ -120,7 +120,7 @@ func parseFlags() (sorterParams, error) {
 	flag.BoolVar(&params.DryRun, "dry-run", true, "If true, the files will not be moved.")
 	flag.BoolVar(&params.Debug, "debug", false, "If true, enables debug mode.")
 	flag.IntVar(&params.Limit, "limit", math.MaxInt32, "Limits the number of files processed.")
-	flag.IntVar(&params.Workers, "workers", 0, "The number of workers used to process files.")
+	flag.IntVar(&params.Workers, "workers", 1, "The number of workers used to process files.")
 
 	// Parse the command line flags.
 	flag.Parse()
